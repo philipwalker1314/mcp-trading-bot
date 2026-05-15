@@ -23,22 +23,23 @@ logger = get_logger("lifecycle")
 # How often to flush unrealized PnL to DB (seconds)
 PNL_DB_FLUSH_INTERVAL = 60
 
+# FIX 2: minimum price movement before logging a trailing stop event.
+# Prevents hundreds of trade_events per hour on active markets.
+# 0.1% = stop must move at least 0.1% of current price to be logged.
+TRAILING_LOG_THRESHOLD = 0.001
+
 
 class TradeLifecycleService:
     """
     The single authoritative service for all
     position and trade state transitions.
 
-    Rules:
-    - open_position()  → creates Position + Trade (fill)
-    - close_position() → updates Position + logs event
-    - No other service writes to positions directly
-    - All transitions emit events via EventBus
-
-    Optimization:
-    - unrealized_pnl is tracked in-memory (_pnl_cache)
-    - DB is only written every PNL_DB_FLUSH_INTERVAL seconds
-    - SL/TP checks use the in-memory value, not DB
+    Fixes in this version:
+    - FIX 2: trailing stop events only written to trade_events if stop
+      moved more than TRAILING_LOG_THRESHOLD (default 0.1%).
+      The stop is still updated in DB on every meaningful move —
+      only the audit log event is throttled.
+    - PnL in-memory cache unchanged (already optimized in Phase 2).
     """
 
     def __init__(
@@ -69,10 +70,7 @@ class TradeLifecycleService:
         trailing_stop_pct: float | None = None,
         exchange_order_id: str | None = None,
     ) -> Position:
-        """
-        Create a new Position and its initial Trade fill.
-        Emits: Events.POSITION_OPENED
-        """
+
         async with self._factory() as db:
 
             position = Position(
@@ -93,7 +91,7 @@ class TradeLifecycleService:
                 exchange_position_id=exchange_order_id,
             )
             db.add(position)
-            await db.flush()  # get position.id
+            await db.flush()
 
             fill = Trade(
                 position_id=position.id,
@@ -116,9 +114,9 @@ class TradeLifecycleService:
                 unrealized_pnl=0.0,
                 realized_pnl=0.0,
                 metadata={
-                    "strategy": strategy_name,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
+                    "strategy":          strategy_name,
+                    "stop_loss":         stop_loss,
+                    "take_profit":       take_profit,
                     "trailing_stop_pct": trailing_stop_pct,
                 },
             )
@@ -126,7 +124,6 @@ class TradeLifecycleService:
             await db.commit()
             await db.refresh(position)
 
-        # Seed in-memory cache
         self._pnl_cache[position.id] = {
             "upnl":       0.0,
             "mfe":        0.0,
@@ -160,12 +157,7 @@ class TradeLifecycleService:
         exit_price:  float,
         reason:      CloseReason,
     ) -> Position | None:
-        """
-        Close a position fully.
-        Calculates realized PnL, updates status,
-        records audit event, broadcasts.
-        Emits: Events.POSITION_CLOSED
-        """
+
         async with self._factory() as db:
 
             position = await db.get(Position, position_id)
@@ -188,7 +180,6 @@ class TradeLifecycleService:
             realized_pnl = PnLEngine.calc_realized_pnl(position, exit_price)
             exit_fees    = PnLEngine.calc_fees(exit_price, position.remaining_quantity)
 
-            # Flush final MFE/MAE from cache before closing
             cache = self._pnl_cache.get(position_id, {})
 
             position.status             = OrderStatus.CLOSED
@@ -224,7 +215,6 @@ class TradeLifecycleService:
             await db.commit()
             await db.refresh(position)
 
-        # Clean up cache
         self._pnl_cache.pop(position_id, None)
 
         logger.info(
@@ -252,6 +242,7 @@ class TradeLifecycleService:
         exit_price:    float,
         exit_quantity: float,
     ) -> Position | None:
+
         async with self._factory() as db:
 
             position = await db.get(Position, position_id)
@@ -293,8 +284,7 @@ class TradeLifecycleService:
         return position
 
     # ─────────────────────────────────────────
-    # Realtime PnL update — IN MEMORY ONLY
-    # DB flush happens every PNL_DB_FLUSH_INTERVAL seconds
+    # Realtime PnL — in-memory only, DB flush every 60s
     # ─────────────────────────────────────────
 
     async def update_unrealized_pnl(
@@ -302,12 +292,6 @@ class TradeLifecycleService:
         position_id:   int,
         current_price: float,
     ):
-        """
-        OPTIMIZED: Updates PnL in-memory cache only.
-        Writes to DB at most once per PNL_DB_FLUSH_INTERVAL seconds.
-        This eliminates the constant UPDATE storm on every tick.
-        """
-        # Get position from DB only if not in cache
         if position_id not in self._pnl_cache:
             async with self._factory() as db:
                 position = await db.get(Position, position_id)
@@ -325,8 +309,6 @@ class TradeLifecycleService:
 
         cache = self._pnl_cache[position_id]
 
-        # Calculate PnL using cached values (no DB call)
-        from app.models.trades import TradeSide
         multiplier = 1.0 if cache["side"] == TradeSide.BUY else -1.0
         upnl = (
             (current_price - cache["avg_entry_price"])
@@ -334,29 +316,25 @@ class TradeLifecycleService:
             * multiplier
         )
 
-        # Update in-memory cache
         cache["upnl"] = upnl
         if upnl > cache["mfe"]:
             cache["mfe"] = upnl
         if upnl < cache["mae"]:
             cache["mae"] = upnl
 
-        # Flush to DB only every PNL_DB_FLUSH_INTERVAL seconds
         now = datetime.utcnow()
-        seconds_since_flush = (now - cache["last_flush"]).total_seconds()
-
-        if seconds_since_flush >= PNL_DB_FLUSH_INTERVAL:
+        if (now - cache["last_flush"]).total_seconds() >= PNL_DB_FLUSH_INTERVAL:
             async with self._factory() as db:
                 position = await db.get(Position, position_id)
                 if position:
-                    position.unrealized_pnl          = upnl
-                    position.max_favorable_excursion  = cache["mfe"]
-                    position.max_adverse_excursion    = cache["mae"]
+                    position.unrealized_pnl         = upnl
+                    position.max_favorable_excursion = cache["mfe"]
+                    position.max_adverse_excursion   = cache["mae"]
                     await db.commit()
             cache["last_flush"] = now
 
     # ─────────────────────────────────────────
-    # Trailing stop update
+    # Trailing stop — FIX 2
     # ─────────────────────────────────────────
 
     async def update_trailing_stop(
@@ -364,6 +342,14 @@ class TradeLifecycleService:
         position_id:   int,
         current_price: float,
     ) -> float | None:
+        """
+        FIX 2: Only writes a trade_events audit record when the trailing
+        stop moves by more than TRAILING_LOG_THRESHOLD (0.1%).
+
+        The DB column (trailing_stop_price) is updated whenever the stop
+        actually moves — the throttle only applies to the audit log.
+        This prevents hundreds of STOP_LOSS_MOVED events per hour.
+        """
         async with self._factory() as db:
             position = await db.get(Position, position_id)
             if not position:
@@ -375,23 +361,31 @@ class TradeLifecycleService:
 
             old_stop = position.trailing_stop_price
 
+            # No movement at all — skip
             if old_stop is not None and new_stop == old_stop:
                 return None
 
             position.trailing_stop_price = new_stop
 
-            await self._log_event(
-                db=db,
-                position_id=position.id,
-                event_type=TradeEventType.STOP_LOSS_MOVED,
-                price=current_price,
-                unrealized_pnl=position.unrealized_pnl,
-                realized_pnl=position.realized_pnl,
-                metadata={
-                    "old_stop": old_stop,
-                    "new_stop": new_stop,
-                },
+            # FIX 2: only log to trade_events if move exceeds threshold
+            should_log = (
+                old_stop is None
+                or abs(new_stop - old_stop) / old_stop >= TRAILING_LOG_THRESHOLD
             )
+
+            if should_log:
+                await self._log_event(
+                    db=db,
+                    position_id=position.id,
+                    event_type=TradeEventType.STOP_LOSS_MOVED,
+                    price=current_price,
+                    unrealized_pnl=position.unrealized_pnl,
+                    realized_pnl=position.realized_pnl,
+                    metadata={
+                        "old_stop": old_stop,
+                        "new_stop": new_stop,
+                    },
+                )
 
             await db.commit()
 

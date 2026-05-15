@@ -1,16 +1,20 @@
 """
-TradingBot — updated for Phase 2.
+TradingBot — Phase 2, optimized.
 
-Key changes from Phase 1:
-1. MarketDataEngine owns market data (not polling in bot)
-2. StrategyEngine subscribes to CANDLE_CLOSED events
-3. LifecycleService handles open/close (not executor directly)
-4. PositionMonitor subscribes to MARKET_TICK events
-5. Reconciliation runs on startup and periodically
-6. Bot loop is now event-driven, not sleep-poll
+Fixes applied in this version:
+  Fix 1: risk manager now checks per-symbol (in risk_manager.py)
+  Fix 2: trailing stop audit log throttled (in trade_lifecycle_service.py)
+  Fix 3: _on_position_closed syncs risk_manager._open_symbols on close
+  Fix 4: reconciliation skipped in paper trading (in reconciliation.py)
+  Fix 5: strategy_loader uses mtime cache (in strategy_loader.py)
 
-The bot's job is orchestration:
-  start engines → wire events → stay out of the way
+Key order change:
+  Old: strategy → AI → risk → open
+  New: strategy → risk → AI → open
+  
+  Risk is cheap (in-memory). AI costs tokens.
+  Checking risk first eliminates AI calls for already-rejected trades
+  (e.g. symbol already open, max positions reached).
 """
 
 import asyncio
@@ -34,6 +38,7 @@ from app.websocket.manager import register_ws_handlers
 
 logger = get_logger("trading_bot")
 
+# Add more symbols when ready: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 SYMBOLS = ["BTC/USDT"]
 
 
@@ -43,7 +48,7 @@ class TradingBot:
 
         # ── Core infrastructure ──────────────
         self.event_bus = EventBus()
-        self.binance = BinanceService()
+        self.binance   = BinanceService()
 
         # ── Lifecycle (central hub) ──────────
         self.lifecycle = TradeLifecycleService(
@@ -65,7 +70,6 @@ class TradingBot:
             event_bus=self.event_bus,
         )
 
-        # Paper trading fallback (emits synthetic ticks)
         self.ticker_fallback = PositionMonitorFallback(
             event_bus=self.event_bus,
             market_data_service=self.market_engine,
@@ -75,8 +79,8 @@ class TradingBot:
 
         # ── Strategy ─────────────────────────
         self.strategy_loader = StrategyLoader()
-        self.ai_filter = AIFilter()
-        self.risk_manager = RiskManager()
+        self.ai_filter       = AIFilter()
+        self.risk_manager    = RiskManager()
 
         # ── Broker reconciliation ────────────
         self.reconciliation = BrokerReconciliationService(
@@ -84,7 +88,7 @@ class TradingBot:
             binance=self.binance,
         )
 
-        self.running = False
+        self.running  = False
         self._tasks: list[asyncio.Task] = []
 
     async def start(self):
@@ -94,14 +98,14 @@ class TradingBot:
         # 1. Register WebSocket → EventBus bridge
         register_ws_handlers(self.event_bus)
 
-        # 2. Register strategy engine on candle close
-        self.event_bus.subscribe(
-            Events.CANDLE_CLOSED,
-            self._on_candle_closed,
-        )
+        # 2. Strategy execution on candle close
+        self.event_bus.subscribe(Events.CANDLE_CLOSED, self._on_candle_closed)
 
-        # 3. Run startup reconciliation with timeout
-        # so a bad API key doesn't block the bot from starting
+        # FIX 3: sync risk_manager open_symbols when a position closes
+        # (covers SL/TP/trailing/emergency closes — not just manual)
+        self.event_bus.subscribe(Events.POSITION_CLOSED, self._on_position_closed)
+
+        # 3. Startup reconciliation (instant no-op in paper trading)
         try:
             await asyncio.wait_for(self.reconciliation.run(), timeout=10.0)
         except asyncio.TimeoutError:
@@ -109,7 +113,7 @@ class TradingBot:
         except Exception as e:
             logger.warning("reconciliation_startup_skipped", error=str(e))
 
-        # 4. Start market data engine (WebSocket streams)
+        # 4. Start market data engine
         self._tasks.append(
             asyncio.create_task(
                 self.market_engine.start(),
@@ -120,7 +124,7 @@ class TradingBot:
         # 5. Start position monitor
         await self.position_monitor.start()
 
-        # 6. In paper trading mode, start fallback ticker
+        # 6. Fallback ticker in paper trading
         if settings.PAPER_TRADING:
             self._tasks.append(
                 asyncio.create_task(
@@ -129,7 +133,7 @@ class TradingBot:
                 )
             )
 
-        # 7. Periodic reconciliation (every 60s)
+        # 7. Periodic reconciliation loop (skips internally in paper trading)
         self._tasks.append(
             asyncio.create_task(
                 self._reconciliation_loop(),
@@ -139,7 +143,7 @@ class TradingBot:
 
         logger.info("trading_bot_started")
 
-        # Keep bot alive — all work is event-driven
+        # Bot is event-driven — just stay alive
         while self.running:
             await asyncio.sleep(5)
 
@@ -157,16 +161,21 @@ class TradingBot:
         logger.info("trading_bot_stopped")
 
     # ─────────────────────────────────────────
+    # FIX 3: keep risk_manager in sync on all closes
+    # ─────────────────────────────────────────
+
+    async def _on_position_closed(self, event):
+        symbol = event.payload.get("symbol")
+        await self.risk_manager.close_trade(symbol=symbol)
+        logger.debug("risk_manager_synced_on_close", symbol=symbol)
+
+    # ─────────────────────────────────────────
     # Strategy execution on candle close
     # ─────────────────────────────────────────
 
     async def _on_candle_closed(self, event):
-        """
-        Called when a candle closes on any symbol.
-        Runs all enabled strategies on that symbol.
-        """
         payload = event.payload
-        symbol = payload.get("symbol")
+        symbol  = payload.get("symbol")
 
         if not symbol:
             return
@@ -178,6 +187,7 @@ class TradingBot:
         if dataframe is None:
             return
 
+        # FIX 5: strategy_loader uses mtime cache — no disk hit if unchanged
         strategies = self.strategy_loader.load_strategies()
 
         for strategy_name, strategy in strategies.items():
@@ -197,7 +207,26 @@ class TradingBot:
                     signal=signal,
                 )
 
-                # AI validation
+                # ── Risk check BEFORE AI ─────────────────────────────
+                # Cheap in-memory check. If rejected here, no AI call.
+                # FIX 1: validate_trade now also checks per-symbol guard.
+                approved = await self.risk_manager.validate_trade(
+                    symbol=symbol,
+                    signal=signal,
+                    strategy=strategy,
+                )
+
+                if not approved:
+                    logger.info(
+                        "signal_pre_rejected_by_risk",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        signal=signal,
+                    )
+                    continue
+
+                # ── AI validation ─────────────────────────────────────
+                # Only reached if risk approved. Saves tokens.
                 ai_signal = await self.ai_filter.confirm_trade(
                     signal=signal,
                     dataframe=dataframe,
@@ -212,30 +241,20 @@ class TradingBot:
                     )
                     continue
 
-                # Risk validation
-                approved = await self.risk_manager.validate_trade(
-                    symbol=symbol,
-                    signal=signal,
-                    strategy=strategy,
-                )
-
-                if not approved:
-                    continue
-
-                # Open position through lifecycle service
+                # ── Open position ─────────────────────────────────────
                 current_price = self.market_engine.get_latest_price(symbol)
                 if not current_price:
                     continue
 
-                stop_pct = getattr(strategy, "stop_loss_percent", 0.02)
-                target_pct = getattr(strategy, "take_profit_percent", 0.04)
-                trail_pct = getattr(strategy, "trailing_stop_percent", None)
+                stop_pct   = getattr(strategy, "stop_loss_percent",    0.02)
+                target_pct = getattr(strategy, "take_profit_percent",   0.04)
+                trail_pct  = getattr(strategy, "trailing_stop_percent", None)
 
                 if signal == "BUY":
-                    stop_loss = current_price * (1 - stop_pct)
+                    stop_loss   = current_price * (1 - stop_pct)
                     take_profit = current_price * (1 + target_pct)
                 else:
-                    stop_loss = current_price * (1 + stop_pct)
+                    stop_loss   = current_price * (1 + stop_pct)
                     take_profit = current_price * (1 - target_pct)
 
                 position = await self.lifecycle.open_position(
@@ -249,7 +268,8 @@ class TradingBot:
                     trailing_stop_pct=trail_pct,
                 )
 
-                await self.risk_manager.register_trade()
+                # FIX 1: pass symbol so risk_manager tracks it
+                await self.risk_manager.register_trade(symbol=symbol)
 
                 logger.info(
                     "position_opened",
@@ -274,6 +294,7 @@ class TradingBot:
         while self.running:
             try:
                 await asyncio.sleep(60)
+                # FIX 4: run() returns instantly in paper trading
                 await self.reconciliation.run()
             except asyncio.CancelledError:
                 break

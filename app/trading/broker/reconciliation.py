@@ -1,7 +1,8 @@
 from datetime import datetime
 
+from app.config import settings
 from app.logger import get_logger
-from app.models.trades import CloseReason, OrderStatus, Position
+from app.models.trades import CloseReason, Position
 from app.services.binance_service import BinanceService
 from app.trading.lifecycle.trade_lifecycle_service import TradeLifecycleService
 
@@ -20,9 +21,21 @@ class BrokerReconciliationService:
 
     async def run(self) -> dict:
         """
-        Execute a full reconciliation pass.
-        Returns a summary of actions taken.
+        FIX 4: Skip entirely when PAPER_TRADING=true.
+        There is no real exchange position to reconcile against,
+        so every previous run was a no-op that still hit the DB
+        and Binance API every 60 seconds.
         """
+        if settings.PAPER_TRADING:
+            logger.debug("reconciliation_skipped_paper_trading")
+            return {
+                "force_closed":    [],
+                "qty_adjusted":    [],
+                "orphan_imported": [],
+                "errors":          [],
+                "skipped":         True,
+            }
+
         logger.info("reconciliation_started")
 
         actions = {
@@ -30,17 +43,14 @@ class BrokerReconciliationService:
             "qty_adjusted":    [],
             "orphan_imported": [],
             "errors":          [],
+            "skipped":         False,
         }
 
         try:
             exchange_positions = await self._fetch_exchange_positions()
             local_positions    = await self.lifecycle.get_open_positions()
 
-            await self._reconcile(
-                local_positions,
-                exchange_positions,
-                actions,
-            )
+            await self._reconcile(local_positions, exchange_positions, actions)
 
         except Exception as e:
             logger.error("reconciliation_error", error=str(e))
@@ -50,7 +60,6 @@ class BrokerReconciliationService:
             "reconciliation_completed",
             force_closed=len(actions["force_closed"]),
             qty_adjusted=len(actions["qty_adjusted"]),
-            orphan_imported=len(actions["orphan_imported"]),
         )
 
         return actions
@@ -61,14 +70,9 @@ class BrokerReconciliationService:
         exchange: dict[str, dict],
         actions:  dict,
     ):
-        """
-        Core reconciliation logic.
-        For paper trading, exchange dict will be empty — this becomes a no-op.
-        """
         exchange_symbols = set(exchange.keys())
         local_symbols    = {p.symbol for p in local}
-
-        ghost_symbols = local_symbols - exchange_symbols
+        ghost_symbols    = local_symbols - exchange_symbols
 
         for position in local:
             if position.symbol in ghost_symbols:
@@ -88,7 +92,6 @@ class BrokerReconciliationService:
                     close_price,
                     CloseReason.RECONCILIATION,
                 )
-
                 await self._stamp_reconciled(position.id)
 
                 actions["force_closed"].append({
@@ -118,15 +121,8 @@ class BrokerReconciliationService:
                 await self._stamp_reconciled(position.id)
 
     async def _fetch_exchange_positions(self) -> dict[str, dict]:
-        """
-        Fetch open positions from Binance.
-        Returns {symbol: {"qty": float, "price": float}}
-
-        For paper trading this returns {} (nothing to reconcile).
-        """
         try:
-            balance = await self.binance.fetch_balance()
-
+            balance   = await self.binance.fetch_balance()
             positions = {}
 
             for item in balance.get("info", {}).get("balances", []):
@@ -142,10 +138,8 @@ class BrokerReconciliationService:
             return {}
 
     async def _stamp_reconciled(self, position_id: int):
-        """Update last_reconciled_at on the position."""
         from app.database import AsyncSessionLocal
         from sqlalchemy import update
-        from app.models.trades import Position
 
         async with AsyncSessionLocal() as db:
             await db.execute(
