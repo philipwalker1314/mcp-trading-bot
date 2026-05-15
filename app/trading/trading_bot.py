@@ -68,9 +68,9 @@ class TradingBot:
         # Paper trading fallback (emits synthetic ticks)
         self.ticker_fallback = PositionMonitorFallback(
             event_bus=self.event_bus,
-            market_data_service=None,
+            market_data_service=self.market_engine,
             symbols=SYMBOLS,
-            interval_seconds=2.0,
+            interval_seconds=10.0,
         )
 
         # ── Strategy ─────────────────────────
@@ -122,7 +122,6 @@ class TradingBot:
 
         # 6. In paper trading mode, start fallback ticker
         if settings.PAPER_TRADING:
-            self.ticker_fallback.market_data_service = self.market_engine
             self._tasks.append(
                 asyncio.create_task(
                     self.ticker_fallback.start(),

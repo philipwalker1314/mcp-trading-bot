@@ -34,25 +34,16 @@ class PositionMonitor:
         self.event_bus  = event_bus
         self.running    = False
 
-        # Cache: symbol → list of open position IDs
-        # Rebuilt on startup and updated on open/close events
         self._position_cache: dict[str, list[int]] = defaultdict(list)
 
     async def start(self):
-        """
-        Register event handlers and start monitoring.
-        In event-driven mode, this subscribes to
-        market ticks — no loop needed.
-        """
         self.running = True
 
-        # Subscribe to market ticks (from MarketDataEngine)
         self.event_bus.subscribe(
             Events.MARKET_TICK,
             self._on_market_tick,
         )
 
-        # Keep cache consistent
         self.event_bus.subscribe(
             Events.POSITION_OPENED,
             self._on_position_opened,
@@ -62,7 +53,6 @@ class PositionMonitor:
             self._on_position_closed,
         )
 
-        # Warm up cache on startup
         await self._rebuild_cache()
 
         logger.info("position_monitor_started", mode="event_driven")
@@ -71,15 +61,7 @@ class PositionMonitor:
         self.running = False
         logger.warning("position_monitor_stopped")
 
-    # ─────────────────────────────────────────
-    # Market tick handler
-    # ─────────────────────────────────────────
-
     async def _on_market_tick(self, event):
-        """
-        Called on every market tick for subscribed symbols.
-        This replaces the sleep(1) polling loop.
-        """
         if not self.running:
             return
 
@@ -103,33 +85,21 @@ class PositionMonitor:
         symbol: str,
         price: float,
     ):
-        """
-        For a single position + current price:
-        1. Update unrealized PnL
-        2. Check and update trailing stop
-        3. Check SL hit
-        4. Check TP hit
-        """
         position = await self.lifecycle.get_position(position_id)
 
         if not position or position.status not in (
             OrderStatus.FILLED,
             OrderStatus.PARTIALLY_FILLED,
         ):
-            # Position was closed externally — remove from cache
             self._remove_from_cache(symbol, position_id)
             return
 
-        # 1 — Update unrealized PnL
         await self.lifecycle.update_unrealized_pnl(position_id, price)
 
-        # 2 — Update trailing stop (may raise it)
         if position.trailing_stop_pct:
             await self.lifecycle.update_trailing_stop(position_id, price)
-            # Reload position to get updated trailing stop price
             position = await self.lifecycle.get_position(position_id)
 
-        # 3 — Check stop loss (trailing takes priority via PnLEngine)
         if PnLEngine.is_stop_loss_hit(position, price):
             logger.warning(
                 "stop_loss_triggered",
@@ -151,7 +121,6 @@ class PositionMonitor:
             )
             return
 
-        # 4 — Check take profit
         if PnLEngine.is_take_profit_hit(position, price):
             logger.info(
                 "take_profit_triggered",
@@ -169,12 +138,7 @@ class PositionMonitor:
                 {"position_id": position_id, "price": price},
             )
 
-    # ─────────────────────────────────────────
-    # Cache management
-    # ─────────────────────────────────────────
-
     async def _rebuild_cache(self):
-        """Reload open positions from DB on startup."""
         self._position_cache.clear()
         positions = await self.lifecycle.get_open_positions()
         for p in positions:
@@ -218,15 +182,9 @@ class PositionMonitorFallback:
     without WebSocket market streams (paper trading,
     testnet, development).
 
-    Fetches latest prices via REST and manually
-    emits MARKET_TICK events to the EventBus,
-    so the main PositionMonitor receives them
-    identically to production.
-
-    This is the bridge between polling and
-    event-driven architecture — the strategy
-    engine doesn't need to change when you
-    switch to live WebSocket streams.
+    FIX: get_latest_price() on MarketDataEngine is SYNCHRONOUS
+    (in-memory dict lookup, no network call).
+    Do NOT use await on it.
     """
 
     def __init__(
@@ -253,9 +211,13 @@ class PositionMonitorFallback:
         while self.running:
             try:
                 for symbol in self.symbols:
-                    price = await self.market.get_latest_price(symbol)
-                    # Emit a synthetic MARKET_TICK event
-                    # identical to what WebSocket streams produce
+                    # FIX: get_latest_price is synchronous — no await
+                    price = self.market.get_latest_price(symbol)
+
+                    if price is None:
+                        # Engine not ready yet — skip this tick
+                        continue
+
                     await self.event_bus.publish(
                         Events.MARKET_TICK,
                         {"symbol": symbol, "price": price},

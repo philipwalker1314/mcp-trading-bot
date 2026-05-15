@@ -23,7 +23,7 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(
     settings.postgres_url,
-    echo=settings.DEBUG,
+    echo=False,
     future=True,
     pool_pre_ping=True,
 )

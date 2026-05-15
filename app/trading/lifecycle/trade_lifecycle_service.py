@@ -20,6 +20,9 @@ from app.trading.lifecycle.pnl_engine import PnLEngine
 
 logger = get_logger("lifecycle")
 
+# How often to flush unrealized PnL to DB (seconds)
+PNL_DB_FLUSH_INTERVAL = 60
+
 
 class TradeLifecycleService:
     """
@@ -31,6 +34,11 @@ class TradeLifecycleService:
     - close_position() → updates Position + logs event
     - No other service writes to positions directly
     - All transitions emit events via EventBus
+
+    Optimization:
+    - unrealized_pnl is tracked in-memory (_pnl_cache)
+    - DB is only written every PNL_DB_FLUSH_INTERVAL seconds
+    - SL/TP checks use the in-memory value, not DB
     """
 
     def __init__(
@@ -42,19 +50,22 @@ class TradeLifecycleService:
         self._event_bus = event_bus
         self._pnl       = PnLEngine()
 
+        # In-memory PnL cache: position_id → {upnl, mfe, mae, last_flush}
+        self._pnl_cache: dict[int, dict] = {}
+
     # ─────────────────────────────────────────
     # Open
     # ─────────────────────────────────────────
 
     async def open_position(
         self,
-        symbol:          str,
-        side:            str,
-        entry_price:     float,
-        quantity:        float,
-        strategy_name:   str,
-        stop_loss:       float | None = None,
-        take_profit:     float | None = None,
+        symbol:            str,
+        side:              str,
+        entry_price:       float,
+        quantity:          float,
+        strategy_name:     str,
+        stop_loss:         float | None = None,
+        take_profit:       float | None = None,
         trailing_stop_pct: float | None = None,
         exchange_order_id: str | None = None,
     ) -> Position:
@@ -84,7 +95,6 @@ class TradeLifecycleService:
             db.add(position)
             await db.flush()  # get position.id
 
-            # Record the fill as a Trade
             fill = Trade(
                 position_id=position.id,
                 symbol=symbol,
@@ -98,7 +108,6 @@ class TradeLifecycleService:
             db.add(fill)
             position.total_fees += fill.fees
 
-            # Audit trail
             await self._log_event(
                 db=db,
                 position_id=position.id,
@@ -116,6 +125,14 @@ class TradeLifecycleService:
 
             await db.commit()
             await db.refresh(position)
+
+        # Seed in-memory cache
+        self._pnl_cache[position.id] = {
+            "upnl":       0.0,
+            "mfe":        0.0,
+            "mae":        0.0,
+            "last_flush": datetime.utcnow(),
+        }
 
         logger.info(
             "position_opened",
@@ -168,28 +185,29 @@ class TradeLifecycleService:
                 )
                 return None
 
-            realized_pnl = PnLEngine.calc_realized_pnl(
-                position, exit_price
-            )
-            exit_fees = PnLEngine.calc_fees(
-                exit_price, position.remaining_quantity
-            )
+            realized_pnl = PnLEngine.calc_realized_pnl(position, exit_price)
+            exit_fees    = PnLEngine.calc_fees(exit_price, position.remaining_quantity)
 
-            position.status          = OrderStatus.CLOSED
-            position.exit_price      = exit_price
-            position.realized_pnl    = realized_pnl
-            position.unrealized_pnl  = 0.0
-            position.total_fees      += exit_fees
+            # Flush final MFE/MAE from cache before closing
+            cache = self._pnl_cache.get(position_id, {})
+
+            position.status             = OrderStatus.CLOSED
+            position.exit_price         = exit_price
+            position.realized_pnl       = realized_pnl
+            position.unrealized_pnl     = 0.0
+            position.total_fees         += exit_fees
             position.remaining_quantity = 0.0
-            position.close_reason    = reason
-            position.closed_at       = datetime.utcnow()
+            position.close_reason       = reason
+            position.closed_at          = datetime.utcnow()
+            position.max_favorable_excursion = cache.get("mfe", position.max_favorable_excursion)
+            position.max_adverse_excursion   = cache.get("mae", position.max_adverse_excursion)
 
             event_type = {
-                CloseReason.STOP_LOSS:     TradeEventType.STOP_LOSS_HIT,
-                CloseReason.TRAILING_STOP: TradeEventType.TRAILING_STOP_HIT,
-                CloseReason.TAKE_PROFIT:   TradeEventType.TAKE_PROFIT_HIT,
-                CloseReason.MANUAL:        TradeEventType.MANUAL_CLOSE,
-                CloseReason.EMERGENCY:     TradeEventType.EMERGENCY_CLOSE,
+                CloseReason.STOP_LOSS:      TradeEventType.STOP_LOSS_HIT,
+                CloseReason.TRAILING_STOP:  TradeEventType.TRAILING_STOP_HIT,
+                CloseReason.TAKE_PROFIT:    TradeEventType.TAKE_PROFIT_HIT,
+                CloseReason.MANUAL:         TradeEventType.MANUAL_CLOSE,
+                CloseReason.EMERGENCY:      TradeEventType.EMERGENCY_CLOSE,
                 CloseReason.RECONCILIATION: TradeEventType.RECONCILIATION_CLOSE,
             }.get(reason, TradeEventType.MANUAL_CLOSE)
 
@@ -205,6 +223,9 @@ class TradeLifecycleService:
 
             await db.commit()
             await db.refresh(position)
+
+        # Clean up cache
+        self._pnl_cache.pop(position_id, None)
 
         logger.info(
             "position_closed",
@@ -227,15 +248,10 @@ class TradeLifecycleService:
 
     async def partial_close(
         self,
-        position_id:    int,
-        exit_price:     float,
-        exit_quantity:  float,
+        position_id:   int,
+        exit_price:    float,
+        exit_quantity: float,
     ) -> Position | None:
-        """
-        Close part of a position (scale out).
-        Updates remaining_quantity and cumulates
-        realized PnL.
-        """
         async with self._factory() as db:
 
             position = await db.get(Position, position_id)
@@ -243,7 +259,6 @@ class TradeLifecycleService:
                 return None
 
             if exit_quantity >= position.remaining_quantity:
-                # treat as full close
                 return await self.close_position(
                     position_id, exit_price, CloseReason.PARTIAL
                 )
@@ -266,9 +281,9 @@ class TradeLifecycleService:
                 unrealized_pnl=position.unrealized_pnl,
                 realized_pnl=position.realized_pnl,
                 metadata={
-                    "exit_quantity": exit_quantity,
+                    "exit_quantity":      exit_quantity,
                     "remaining_quantity": position.remaining_quantity,
-                    "partial_pnl": partial_pnl,
+                    "partial_pnl":        partial_pnl,
                 },
             )
 
@@ -278,7 +293,8 @@ class TradeLifecycleService:
         return position
 
     # ─────────────────────────────────────────
-    # Realtime PnL update (called by monitor)
+    # Realtime PnL update — IN MEMORY ONLY
+    # DB flush happens every PNL_DB_FLUSH_INTERVAL seconds
     # ─────────────────────────────────────────
 
     async def update_unrealized_pnl(
@@ -287,27 +303,57 @@ class TradeLifecycleService:
         current_price: float,
     ):
         """
-        Update mark-to-market PnL and track
-        MFE / MAE (max favorable/adverse excursion).
-        Called frequently — no event emitted to
-        avoid flooding the bus. WebSocket gets
-        price directly from market stream instead.
+        OPTIMIZED: Updates PnL in-memory cache only.
+        Writes to DB at most once per PNL_DB_FLUSH_INTERVAL seconds.
+        This eliminates the constant UPDATE storm on every tick.
         """
-        async with self._factory() as db:
-            position = await db.get(Position, position_id)
-            if not position:
-                return
+        # Get position from DB only if not in cache
+        if position_id not in self._pnl_cache:
+            async with self._factory() as db:
+                position = await db.get(Position, position_id)
+                if not position:
+                    return
+                self._pnl_cache[position_id] = {
+                    "upnl":            position.unrealized_pnl,
+                    "mfe":             position.max_favorable_excursion,
+                    "mae":             position.max_adverse_excursion,
+                    "last_flush":      datetime.utcnow(),
+                    "avg_entry_price": position.avg_entry_price,
+                    "remaining_qty":   position.remaining_quantity,
+                    "side":            position.side,
+                }
 
-            upnl = PnLEngine.calc_unrealized_pnl(position, current_price)
-            position.unrealized_pnl = upnl
+        cache = self._pnl_cache[position_id]
 
-            if upnl > position.max_favorable_excursion:
-                position.max_favorable_excursion = upnl
+        # Calculate PnL using cached values (no DB call)
+        from app.models.trades import TradeSide
+        multiplier = 1.0 if cache["side"] == TradeSide.BUY else -1.0
+        upnl = (
+            (current_price - cache["avg_entry_price"])
+            * cache["remaining_qty"]
+            * multiplier
+        )
 
-            if upnl < position.max_adverse_excursion:
-                position.max_adverse_excursion = upnl
+        # Update in-memory cache
+        cache["upnl"] = upnl
+        if upnl > cache["mfe"]:
+            cache["mfe"] = upnl
+        if upnl < cache["mae"]:
+            cache["mae"] = upnl
 
-            await db.commit()
+        # Flush to DB only every PNL_DB_FLUSH_INTERVAL seconds
+        now = datetime.utcnow()
+        seconds_since_flush = (now - cache["last_flush"]).total_seconds()
+
+        if seconds_since_flush >= PNL_DB_FLUSH_INTERVAL:
+            async with self._factory() as db:
+                position = await db.get(Position, position_id)
+                if position:
+                    position.unrealized_pnl          = upnl
+                    position.max_favorable_excursion  = cache["mfe"]
+                    position.max_adverse_excursion    = cache["mae"]
+                    await db.commit()
+            cache["last_flush"] = now
 
     # ─────────────────────────────────────────
     # Trailing stop update
@@ -318,11 +364,6 @@ class TradeLifecycleService:
         position_id:   int,
         current_price: float,
     ) -> float | None:
-        """
-        Recalculate and persist trailing stop.
-        Returns new stop price if updated, else None.
-        Emits: Events.TRAILING_UPDATED if stop moved.
-        """
         async with self._factory() as db:
             position = await db.get(Position, position_id)
             if not position:
@@ -335,7 +376,7 @@ class TradeLifecycleService:
             old_stop = position.trailing_stop_price
 
             if old_stop is not None and new_stop == old_stop:
-                return None  # no change
+                return None
 
             position.trailing_stop_price = new_stop
 
@@ -369,18 +410,13 @@ class TradeLifecycleService:
         self,
         current_prices: dict[str, float],
     ) -> list[Position]:
-        """
-        Close all open positions immediately.
-        Uses last known price for each symbol.
-        Emits: Events.EMERGENCY_STOP
-        """
         open_positions = await self.get_open_positions()
         closed = []
 
         for position in open_positions:
             price = current_prices.get(
                 position.symbol,
-                position.avg_entry_price,  # fallback
+                position.avg_entry_price,
             )
             result = await self.close_position(
                 position.id, price, CloseReason.EMERGENCY
@@ -447,20 +483,20 @@ class TradeLifecycleService:
     @staticmethod
     def _position_to_dict(position: Position) -> dict:
         return {
-            "id":               position.id,
-            "symbol":           position.symbol,
-            "side":             position.side.value,
-            "status":           position.status.value,
-            "avg_entry_price":  position.avg_entry_price,
-            "exit_price":       position.exit_price,
-            "remaining_qty":    position.remaining_quantity,
-            "unrealized_pnl":   position.unrealized_pnl,
-            "realized_pnl":     position.realized_pnl,
-            "stop_loss":        position.stop_loss,
-            "take_profit":      position.take_profit,
-            "trailing_stop":    position.trailing_stop_price,
-            "close_reason":     position.close_reason.value if position.close_reason else None,
-            "strategy":         position.strategy_name,
-            "opened_at":        position.opened_at.isoformat() if position.opened_at else None,
-            "closed_at":        position.closed_at.isoformat() if position.closed_at else None,
+            "id":              position.id,
+            "symbol":          position.symbol,
+            "side":            position.side.value,
+            "status":          position.status.value,
+            "avg_entry_price": position.avg_entry_price,
+            "exit_price":      position.exit_price,
+            "remaining_qty":   position.remaining_quantity,
+            "unrealized_pnl":  position.unrealized_pnl,
+            "realized_pnl":    position.realized_pnl,
+            "stop_loss":       position.stop_loss,
+            "take_profit":     position.take_profit,
+            "trailing_stop":   position.trailing_stop_price,
+            "close_reason":    position.close_reason.value if position.close_reason else None,
+            "strategy":        position.strategy_name,
+            "opened_at":       position.opened_at.isoformat() if position.opened_at else None,
+            "closed_at":       position.closed_at.isoformat() if position.closed_at else None,
         }
