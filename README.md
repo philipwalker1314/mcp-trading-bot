@@ -1,4 +1,4 @@
- trading infrastructure with:
+trading infrastructure with:
 
 - FastAPI
 - Async execution engine
@@ -289,9 +289,9 @@ MarketDataEngine (in-memory candle cache + indicators)
 ↓
 CANDLE_CLOSED event → StrategyEngine
 ↓
-AI Validation (DeepSeek deepseek-v4-flash, thinking disabled)
+Risk Manager (in-memory check — symbol guard + global limits)
 ↓
-Risk Manager
+AI Validation (DeepSeek deepseek-v4-flash, thinking disabled)
 ↓
 TradeLifecycleService → open_position()
 ↓
@@ -303,7 +303,9 @@ SL / TP / Trailing Stop enforcement
 ↓
 TradeLifecycleService → close_position()
 ↓
-EventBus → WebSocket broadcast → Frontend
+EventBus → POSITION_CLOSED → risk_manager.close_trade(symbol)
+↓
+WebSocket broadcast → Frontend
 ```
 
 **Database schema:**
@@ -327,6 +329,11 @@ metrics         — general metrics store
 | `database.py` | SQL echo flooding logs | Hardcoded `echo=False` regardless of DEBUG flag |
 | `lifecycle/trade_lifecycle_service.py` | DB write on every price tick | PnL now tracked in-memory; DB flush only every 60 seconds |
 | `trading_bot.py` | Fallback polling too aggressive | `interval_seconds` increased from 2s to 10s |
+| `trading/risk_manager.py` | Duplicate positions per symbol — risk manager only checked global position count, not per-symbol | Added `_open_symbols: set[str]`; `validate_trade()` rejects if symbol already open |
+| `trading/lifecycle/trade_lifecycle_service.py` | `trade_events` flooded with trailing stop entries — one row per cent of price movement | Audit log throttled: only writes `STOP_LOSS_MOVED` event if stop moved ≥ 0.1% |
+| `trading/trading_bot.py` | Risk manager `_open_symbols` never cleared on automatic SL/TP close — bot stops opening positions after first auto-close | Subscribe to `POSITION_CLOSED` event; call `risk_manager.close_trade(symbol)` on every close |
+| `trading/broker/reconciliation.py` | Reconciliation ran full DB + Binance API cycle every 60s in paper trading — always a no-op | Early return in `run()` when `PAPER_TRADING=true` |
+| `trading/strategy_loader.py` | `load_strategies()` called `importlib.reload()` on every candle close regardless of file changes | Cache file `mtime`; skip reload if file unchanged. Hot-reload still works |
 
 ---
 
@@ -364,7 +371,11 @@ The system is optimized to minimize unnecessary I/O:
 - **SQL echo disabled** — SQLAlchemy never logs queries in any environment
 - **PnL in-memory cache** — unrealized PnL calculated in RAM, flushed to DB every 60s
 - **Tick interval** — fallback ticker polls every 10s (not every 2s)
+- **Risk checked before AI** — DeepSeek is only called after risk validation passes; already-rejected signals (symbol open, max positions) never reach the AI
 - **AI called on signals only** — DeepSeek is never called on HOLD signals or price ticks
+- **Trailing stop audit throttled** — `STOP_LOSS_MOVED` events only written when stop moves ≥ 0.1%; DB column still updates on every meaningful move
+- **Strategy loader cached** — file `mtime` checked before reimport; no disk I/O on unchanged strategies
+- **Reconciliation skipped in paper trading** — `run()` returns instantly when `PAPER_TRADING=true`; no Binance API or DB calls
 
 This keeps DB writes low and logs clean even with many open positions.
 
@@ -416,9 +427,9 @@ mcp-trading-bot/
 │   │   ├── ai_filter.py
 │   │   ├── indicators.py
 │   │   ├── market_data.py
-│   │   ├── risk_manager.py
+│   │   ├── risk_manager.py               ← Symbol guard + global limits
 │   │   ├── strategy.py                   ← BaseStrategy ABC
-│   │   ├── strategy_loader.py
+│   │   ├── strategy_loader.py            ← mtime cache, hot-reload
 │   │   ├── strategy_engine.py
 │   │   ├── executor.py
 │   │   ├── portfolio.py
@@ -429,12 +440,12 @@ mcp-trading-bot/
 │   │   │   └── market_data_engine.py     ← WebSocket + candle cache
 │   │   │
 │   │   ├── lifecycle/
-│   │   │   ├── trade_lifecycle_service.py ← PnL in-memory cache + 60s DB flush
+│   │   │   ├── trade_lifecycle_service.py ← PnL cache + trailing stop throttle
 │   │   │   ├── position_monitor.py        ← Sync get_latest_price, None guard
 │   │   │   └── pnl_engine.py
 │   │   │
 │   │   └── broker/
-│   │       └── reconciliation.py          ← Fixed Binance balance loop
+│   │       └── reconciliation.py          ← Skips in paper trading
 │   │
 │   ├── websocket/
 │   │   └── manager.py                    ← WS ConnectionManager + endpoints
@@ -453,7 +464,7 @@ mcp-trading-bot/
 │   ├── examples/
 │   │   └── ema_rsi_strategy.py
 │   └── custom/
-│       └── my_strategy.py                ← Add your strategies here
+│       └── my_strategy.py                ← EMA crossover + RSI confluence
 │
 └── tests/
 ```
@@ -484,7 +495,14 @@ class MyStrategy(BaseStrategy):
         return "HOLD"
 ```
 
-Strategies are hot-loaded on every candle close — no restart required.
+> **Important:** Strategies should return `HOLD` the vast majority of the time.
+> A strategy that signals on every candle calls DeepSeek every minute.
+> Use confluence filters (crossover events, RSI zones, multiple conditions) so
+> signals are rare and meaningful. The built-in `my_custom_strategy` uses
+> EMA crossover events as the primary filter — a cross only happens a few times
+> per day, not every candle.
+
+Strategies are hot-loaded when a file changes — no restart required.
 
 ---
 
@@ -507,17 +525,18 @@ BINANCE_TESTNET=true
 With `deepseek-v4-flash` and `thinking: disabled`:
 
 - Average: ~150 tokens per validation request
-- AI is called ONLY when a strategy generates a BUY or SELL signal
-- AI is NOT called on every candle or every tick
+- AI is called ONLY after risk validation passes
+- AI is NOT called on HOLD signals, price ticks, or risk-rejected signals
+- A well-filtered strategy triggers AI a few times per day, not per candle
 
-This is the correct architecture — AI validates signals, it does not run on every market update.
+This is the correct architecture — AI validates strong signals, it does not run on every market update.
 
 ---
 
 ## Roadmap
 
 ### Phase 1 ✅ Core Bot
-Basic async trading pipeline. Market data → Indicators → Strategy → AI → Risk → Paper trade.
+Basic async trading pipeline. Market data → Indicators → Strategy → Risk → AI → Paper trade.
 **Status: Complete and verified working.**
 
 ### Phase 2 ✅ Trade Lifecycle & Persistence
@@ -672,11 +691,12 @@ Phase 1 and Phase 2 are complete and verified working in production (Docker).
 The system currently:
 - Processes real market data via Binance WebSocket streams
 - Generates strategy signals on every candle close
-- Validates trades with DeepSeek AI (`deepseek-v4-flash`, thinking disabled)
+- Checks risk first (symbol guard + global limits) before calling AI
+- Validates strong signals with DeepSeek AI (`deepseek-v4-flash`, thinking disabled)
 - Persists positions, fills, and audit trail to PostgreSQL
 - Monitors open positions for SL/TP/trailing stop in real time
 - Broadcasts live updates via WebSocket to any connected frontend
 - Runs fully async inside Docker infrastructure
-- Optimized: PnL tracked in-memory, DB writes minimized, SQL logging off
+- Optimized: PnL in-memory, DB writes minimized, trailing stop throttled, reconciliation skipped in paper trading, strategy loader cached
 
 **The next milestone is Phase 3 — the frontend dashboard.**
