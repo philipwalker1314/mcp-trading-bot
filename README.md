@@ -1,645 +1,698 @@
-# MCP Trading Bot
+```python
+content = """# MCP Trading Bot
 
-## Overview
+AI-powered autonomous trading infrastructure with:
 
-MCP Trading Bot is an enterprise-grade AI trading platform built with:
-
-* FastAPI
-* PostgreSQL
-* Redis
-* Docker
-* SQLAlchemy Async
-* Binance API
-* NVIDIA AI Models
-* MCP (Model Context Protocol)
-* Strategy Engine
-* AI Signal Validation
-* Risk Management System
-* Real-time Trading Infrastructure
-
-The project is designed to evolve into a fully autonomous AI-powered trading platform with:
-
-* conversational AI control
-* live dashboards
-* strategy generation via prompts
-* portfolio analytics
-* backtesting
-* live/paper trading
-* multi-strategy orchestration
-* multi-exchange support
+- FastAPI
+- Async execution engine
+- Binance integration
+- DeepSeek AI validation
+- PostgreSQL
+- Redis
+- Docker
+- Strategy engine
+- Risk management
+- Paper trading
+- Realtime architecture foundations
 
 ---
 
-# Current Architecture
+## Project Vision
 
-```text
-Frontend Dashboard (future)
-        ↓
-FastAPI Backend
-        ↓
-Trading Engine
-        ↓
-Strategies
-        ↓
-AI Filter (NVIDIA)
-        ↓
-Risk Manager
-        ↓
-Executor
-        ↓
-Binance API
+This project is evolving into:
+
+> **Autonomous AI Trading Operating System** > The long-term goal is to build a complete AI-native trading platform capable of:
+
+- Autonomous trading
+- Conversational strategy management
+- AI-assisted execution
+- Multi-broker connectivity
+- MetaTrader integration
+- Realtime portfolio analytics
+- Visual strategy building
+- AI copilot trading
+- Event-driven execution
+- WebSocket realtime architecture
+
+This is **NOT** intended to become:  
+*"just another trading bot"*
+
+The target architecture is:  
+**AI Trading Operating System**
+
+---
+
+## Installation & Setup
+
+### 1. Clone Repository
+```bash
+git clone <your-repository-url>
+cd mcp-trading-bot
+
+```
+
+### 2. Create Virtual Environment
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+
+```
+
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+
 ```
 
 ---
 
-# Current Features
+## Docker Commands
 
-## Infrastructure
+**Build Containers**
 
-* Dockerized stack
-* Async Python architecture
-* PostgreSQL persistence
-* Redis support
-* Alembic migrations
-* Structured logging
-* Async lifecycle management
+```bash
+docker-compose build
 
----
+```
 
-## Trading Engine
+**Start Infrastructure**
 
-* Strategy loader
-* Multi-strategy execution
-* Technical indicators
-* Risk validation
-* Trade execution pipeline
-* Paper trading support
-* Binance integration
-* AI validation layer
+```bash
+docker-compose up -d
 
----
+```
 
-## AI Integration
+**Stop Infrastructure**
 
-Integrated with NVIDIA AI models through:
+```bash
+docker-compose down
 
-* NVIDIA Build Platform
-* OpenAI-compatible API interface
+```
 
-Current AI responsibilities:
+**Restart Containers**
 
-* signal validation
-* trade filtering
-* risk-aware decision support
+```bash
+docker-compose restart
 
-Future responsibilities:
+```
 
-* strategy generation
-* autonomous optimization
-* conversational trading control
-* market analysis
-* portfolio optimization
+**View Running Containers**
 
----
+```bash
+docker ps
 
-# Current Project Structure
+```
 
-```text
-mcp-trading-bot/
-│
-├── alembic/
-├── app/
-│   ├── main.py
-│   ├── config.py
-│   ├── database.py
-│   ├── logger.py
-│   │
-│   ├── models/
-│   ├── repositories/
-│   ├── services/
-│   ├── trading/
-│   ├── mcp_server/
-│   └── utils/
-│
-├── strategies/
-│   ├── custom/
-│   ├── examples/
-│   └── templates/
-│
-├── tests/
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
+**View Logs**
+
+```bash
+docker-compose logs -f app
+
 ```
 
 ---
 
-# Current Trading Flow
+## Database Setup
 
-```text
-Binance Market Data
-        ↓
-Indicators Engine
-        ↓
-Trading Strategy
-        ↓
-NVIDIA AI Filter
-        ↓
-Risk Manager
-        ↓
-Executor
-        ↓
-Paper Trade / Real Trade
+**Export Python Path**
+
+```bash
+export PYTHONPATH=$(pwd)
+
+```
+
+**Create Alembic Migration**
+
+```bash
+alembic revision --autogenerate -m "initial_tables"
+
+```
+
+**Apply Migrations**
+
+```bash
+alembic upgrade head
+
 ```
 
 ---
 
-# Current Indicators
+## Environment Variables
 
-Implemented indicators:
-
-* EMA
-* RSI
-* MACD
-* ATR
-* Volatility
-
----
-
-# Current Strategies
-
-Example strategies:
-
-* EMA + RSI strategy
-* Custom strategy template
-
-Custom strategies are loaded dynamically from:
-
-```text
-strategies/custom/
-```
-
----
-
-# Environment Variables
-
-Create:
-
-```text
-.env
-```
-
-Example:
+Create a `.env` file:
 
 ```env
+# =====================================================
+# APP
+# =====================================================
 APP_NAME=MCP Trading Bot
 APP_VERSION=1.0.0
 ENVIRONMENT=development
 DEBUG=true
 
+API_HOST=0.0.0.0
+API_PORT=8000
+
+# =====================================================
+# DATABASE
+# =====================================================
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
 POSTGRES_USER=user
 POSTGRES_PASSWORD=password
 POSTGRES_DB=trading
 
+DATABASE_URL=postgresql+asyncpg://user:password@db:5432/trading
+
+# =====================================================
+# REDIS
+# =====================================================
 REDIS_HOST=redis
 REDIS_PORT=6379
 
+REDIS_URL=redis://redis:6379
+
+# =====================================================
+# BINANCE
+# =====================================================
 BINANCE_API_KEY=YOUR_KEY
 BINANCE_SECRET_KEY=YOUR_SECRET
+
 BINANCE_TESTNET=true
 PAPER_TRADING=true
 
-NVIDIA_API_KEY=YOUR_NVIDIA_API_KEY
-NVIDIA_MODEL=meta/llama-3.1-70b-instruct
+# =====================================================
+# AI
+# =====================================================
+DEEPSEEK_API_KEY=YOUR_KEY
+DEEPSEEK_BASE_URL=[https://api.deepseek.com](https://api.deepseek.com)
+DEEPSEEK_MODEL=deepseek-v4-flash
+
+AI_TRADING_ENABLED=true
+
+# =====================================================
+# RISK
+# =====================================================
+MAX_RISK_PER_TRADE=0.01
+MAX_DAILY_DRAWDOWN=0.05
+MAX_OPEN_POSITIONS=3
+
+# =====================================================
+# LOGGING
+# =====================================================
+LOG_LEVEL=INFO
+
 ```
 
 ---
 
-# Binance Setup
+## Application URLs
 
-## Binance Spot Testnet
+* **API:** [http://localhost:8000](https://www.google.com/search?q=http://localhost:8000)
+* **Swagger Docs:** [http://localhost:8000/docs](https://www.google.com/search?q=http://localhost:8000/docs)
+* **Health Check:** [http://localhost:8000/health](https://www.google.com/search?q=http://localhost:8000/health)
+* **Status:** [http://localhost:8000/status](https://www.google.com/search?q=http://localhost:8000/status)
 
-Use:
+---
 
-[https://testnet.binance.vision](https://testnet.binance.vision)
+## Current Status
 
-Generate:
+**YES — The bot is already operational.**
 
-* API KEY
-* SECRET KEY
+The current system successfully:
 
-Add them into:
+* Connects to Binance
+* Fetches live OHLCV market data
+* Calculates indicators
+* Runs trading strategies
+* Sends signals to AI validation
+* Runs risk validation
+* Executes paper trades
+* Runs fully async inside Docker infrastructure
+
+*The complete pipeline is already functional.*
+
+### Current Trading Pipeline
 
 ```text
-.env
+Binance Market Data
+↓
+Indicators
+↓
+Strategy Engine
+↓
+AI Validation Layer
+↓
+Risk Manager
+↓
+Execution Engine
+↓
+Paper Trading
+
 ```
 
 ---
 
-# NVIDIA AI Setup
+## Current Tech Stack
 
-Create API key at:
+### Backend
 
-[https://build.nvidia.com](https://build.nvidia.com)
+* FastAPI
+* Python AsyncIO
+* SQLAlchemy Async
+* Alembic
+* PostgreSQL
+* Redis
+* Docker
+* Structlog
+* AsyncPG
 
-Add:
+### Trading
 
-```env
-NVIDIA_API_KEY=YOUR_KEY
-```
+* Binance API
+* Technical indicators
+* Strategy engine
+* Risk management
+* Execution engine
+* Paper trading engine
 
----
+### AI
 
-# Running The Project
-
-## Clone
-
-```bash
-git clone <repo>
-cd mcp-trading-bot
-```
-
----
-
-# Create Virtual Environment
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
+* DeepSeek V4 Flash
+* AI trade validation
+* AI orchestration layer
 
 ---
 
-# Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# Export Python Path
-
-```bash
-export PYTHONPATH=$(pwd)
-```
-
----
-
-# Alembic Migration
-
-Generate migration:
-
-```bash
-alembic revision --autogenerate -m "initial_tables"
-```
-
-Apply migrations:
-
-```bash
-alembic upgrade head
-```
-
----
-
-# Docker Build
-
-```bash
-docker-compose build
-```
-
----
-
-# Start Stack
-
-```bash
-docker-compose up -d
-```
-
----
-
-# Verify Containers
-
-```bash
-docker ps
-```
-
-Expected:
+## Current Project Structure
 
 ```text
-mcp-trading-bot_app_1
-mcp-trading-bot_db_1
-mcp-trading-bot_redis_1
+mcp-trading-bot/
+├── Dockerfile
+├── README.md
+├── docker-compose.yml
+├── requirements.txt
+├── alembic.ini
+├── .env
+│
+├── alembic/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+│
+├── app/
+│   ├── config.py
+│   ├── database.py
+│   ├── logger.py
+│   ├── main.py
+│   │
+│   ├── models/
+│   │   ├── trades.py
+│   │   ├── signals.py
+│   │   └── metrics.py
+│   │
+│   ├── repositories/
+│   │   ├── trades_repository.py
+│   │   ├── signals_repository.py
+│   │   └── metrics_repository.py
+│   │
+│   ├── services/
+│   │   └── nvidia_service.py
+│   │
+│   ├── trading/
+│   │   ├── ai_filter.py
+│   │   ├── indicators.py
+│   │   ├── market_data.py
+│   │   ├── order_executor.py
+│   │   ├── risk_manager.py
+│   │   ├── strategy.py
+│   │   ├── strategy_loader.py
+│   │   ├── trading_bot.py
+│   │   └── binance_client.py
+│   │
+│   ├── utils/
+│   │   └── retries.py
+│   │
+│   └── mcp_server/
+│
+├── strategies/
+│   ├── examples/
+│   │   └── ema_rsi_strategy.py
+│   │
+│   └── custom/
+│       └── my_strategy.py
+│
+├── tests/
+│
+└── venv/
+
 ```
 
 ---
 
-# API Endpoints
+## Current Features
 
-## Swagger UI
+### Infrastructure
 
-```text
-http://SERVER_IP:8000/docs
-```
+* Dockerized architecture
+* PostgreSQL integration
+* Redis integration
+* Alembic migrations
+* Async runtime
+* Structured logging
+* Async DB sessions
+* Environment-based config
+
+### Trading
+
+* Binance OHLCV fetching
+* Indicator calculation
+* Strategy loading
+* Strategy execution
+* AI trade validation
+* Risk validation
+* Paper trading execution
+* Async trading loop
+
+### API
+
+* FastAPI endpoints
+* Health monitoring
+* Status endpoints
+* Swagger docs
+
+### Verified Working Features
+
+The following has already been tested successfully:
+
+* Strategy signal generation
+* DeepSeek AI responses
+* AI validation flow
+* Risk approval
+* Paper trade execution
+* Async trading loops
+* Live Binance market data
+* FastAPI async runtime
+* Docker orchestration
+* Database initialization
 
 ---
 
-## Health
+## Current Trading Mode
 
-```bash
-curl http://localhost:8000/health
-```
-
----
-
-## Status
-
-```bash
-curl http://localhost:8000/status
-```
-
----
-
-# Logs
-
-```bash
-docker-compose logs -f app
-```
-
----
-
-# Current Operating Modes
-
-## Paper Trading
+Current mode:
 
 ```env
 PAPER_TRADING=true
-```
-
-No real money.
-No real orders.
-
----
-
-## Binance Testnet Trading
-
-```env
-PAPER_TRADING=false
 BINANCE_TESTNET=true
+
 ```
 
-Executes orders in Binance sandbox.
+This means:
+
+* NO real money
+* NO real trades
+* Full simulated execution
+* Safe testing environment
 
 ---
 
-## Real Trading
+## IMPORTANT: AI Token Consumption
 
-```env
-PAPER_TRADING=false
-BINANCE_TESTNET=false
+During testing we noticed high token consumption:
+
+* 15 requests
+* 2373 tokens
+
+This is **NORMAL** for the current architecture because each request contains:
+
+* System prompt
+* Strategy prompt
+* Market data
+* AI response
+
+Average usage: **~150 tokens/request**
+
+### IMPORTANT ARCHITECTURE DECISION
+
+The final architecture **SHOULD NOT** call AI every few seconds.
+Current testing architecture:
+
+```python
+while True:
+    fetch market
+    run strategy
+    call AI
+
 ```
 
-WARNING:
-This uses real money.
+*This is expensive and inefficient.*
+
+### Correct Future Architecture
+
+AI should **ONLY** intervene when:
+A. A valid strategy signal appears
+*(Example: EMA crossover ↓ AI validates trade)* -> NOT every market loop.
+B. High volatility detected
+C. Market regime changes
+D. User requests AI assistance
+E. Strategy generation
 
 ---
 
-# What Is Still Missing
+## Final Recommended Architecture
 
-The backend engine is functional.
+### Traditional Strategy Engine
 
-However, the platform still lacks the full product layer.
+Fast, deterministic, low-cost. Used for:
 
----
+* Indicators
+* Signals
+* Technical analysis
+* Trade execution
 
-# Missing Features / Future Roadmap
+### AI Layer
 
-## 1. Frontend Dashboard
+Used **ONLY** for:
 
-Planned stack:
-
-* Next.js
-* Tailwind
-* shadcn/ui
-* Zustand
-* React Query
-
-Dashboard capabilities:
-
-* live portfolio
-* live trades
-* live PnL
-* active positions
-* signals
-* risk metrics
-* strategy control
-* AI interaction
+* Validation
+* Optimization
+* Reasoning
+* Chat
+* Strategy generation
+* Orchestration
+* Portfolio intelligence
 
 ---
 
-## 2. Conversational AI Control
+## FUTURE GOAL: NO MORE .PY STRATEGIES
 
-Planned functionality:
+The final system should allow:
 
-```text
-"Pause all scalping strategies"
-"Trade only BTC and ETH"
-"Increase risk to 1.5%"
-"Generate RSI strategy"
-```
-
-The AI layer will:
-
-* generate strategies
-* modify runtime parameters
-* control active trading systems
-* manage symbols
-* optimize strategies
-
----
-
-## 3. Strategy Builder UI
-
-Planned features:
-
-* create strategies visually
+* Runtime strategy generation
 * AI-generated strategies
-* upload custom strategies
-* parameter editing
-* enable/disable strategies
-* live deployment
+* Natural language trading rules
+* Visual strategy builders
+* Dynamic strategy orchestration
+**WITHOUT manually editing `.py` files.**
+
+### AI Copilot Vision
+
+The future platform should support:
+
+* *"Trade BTC only during NY session."*
+* *"Risk 1% per trade."*
+* *"Close positions after 5 pip drawdown."*
+* *"Disable trading during CPI news."*
+
+The AI should translate those instructions into:
+
+* Runtime strategy configs
+* Risk policies
+* Execution rules
+* Trade lifecycle management
 
 ---
 
-## 4. Multi-Symbol Control
+## PRIORITIES — NEXT IMPLEMENTATION PHASE
 
-Future functionality:
+### 1. Persist Trades in Database (CRITICAL)
 
-* BTC
-* ETH
-* SOL
-* XRP
-* DOGE
-* custom symbol lists
+Currently paper trades execute successfully but are NOT persisted.
+Need: Open positions, Closed trades, PnL tracking, Trade history, Timestamps, Position lifecycle.
 
-Managed directly from UI.
+### 2. Open Positions Manager
 
----
+Need: Stop loss, Take profit, Trailing stop, Active position monitoring, Close logic, Partial exits, Emergency close.
 
-## 5. Real-Time WebSocket Engine
+### 3. Frontend Realtime Platform
 
-Current system uses polling.
+Need: WebSockets, Live positions, Trading dashboard, AI panel, Realtime charts, Notifications.
 
-Planned upgrade:
+### 4. Trade Lifecycle Engine
 
-* Binance WebSocket streams
-* real-time candles
-* ultra-low latency processing
-* live order events
+Need: Trade monitoring, Position updates, Realized PnL, Unrealized PnL, Position management, Smart exits.
 
----
+### 5. Runtime Strategy Config System
 
-## 6. Advanced Portfolio Analytics
+Goal: Eliminate hardcoded `.py` strategies, Runtime strategy generation, AI-generated rules, Strategy marketplace, Visual strategy builder.
 
-Planned analytics:
+### 6. Broker Connectors
 
-* Sharpe ratio
-* winrate
-* exposure
-* drawdown
-* volatility
-* expectancy
-* equity curves
+Need support for: Binance, Bybit, MetaTrader 4, MetaTrader 5, Oanda, Interactive Brokers, Paper trading brokers.
 
----
+### 7. WebSocket Market Data (VERY IMPORTANT)
 
-## 7. Backtesting Platform
+Current architecture uses polling.
+Need: Live streaming candles, Tick data, Low latency processing, Event-driven execution.
 
-Planned features:
+### 8. Portfolio Engine
 
-* historical simulations
-* visual charts
-* strategy optimization
-* parameter sweeps
-* performance reports
+Need: Exposure tracking, Risk aggregation, Margin analysis, Portfolio allocation, Capital management.
+
+### 9. Analytics Engine
+
+Need: Winrate, Sharpe ratio, Drawdown, Profit factor, Trade analytics, AI performance metrics.
+
+### 10. AI Copilot / Conversational Trading
+
+This is the MAIN differentiator.
+Goal:
+User talks to the platform ↓ AI interprets intent ↓ AI configures trading engine ↓ Bot operates autonomously
 
 ---
 
-## 8. Monitoring Stack
+## MetaTrader Integration Vision
 
-Planned integrations:
+Future support should include:
 
-* Prometheus
-* Grafana
-* alerting
-* uptime monitoring
-* execution metrics
-
----
-
-## 9. Telegram / Discord Integration
-
-Planned functionality:
-
-* trade alerts
-* notifications
-* AI summaries
-* remote bot control
+* MetaTrader 4
+* MetaTrader 5
+* Live broker synchronization
+* Position mirroring
+* MT charts
+* MT order execution
+* MT expert advisor bridge
 
 ---
 
-## 10. AI Strategy Generation
+## Planned Frontend Architecture
 
-One of the major future goals:
+The frontend should evolve into:
+**AI Trading Operating System**
+NOT just: *"another trading bot UI."*
+
+### Planned Frontend Modules
+
+**Trading Dashboard**
+
+* Open trades
+* Closed trades
+* Live PnL
+* Position controls
+* Close buttons
+* Emergency close all
+
+**Open Positions Panel**
+
+* Active positions
+* Historical trades
+* Position filters
+* Realtime updates
+* Close individual trade
+* Close all trades
+
+**AI Chatbox**
+
+* Goal: User writes instructions ↓ AI translates intent ↓ Runtime trading configs ↓ Bot updates behavior automatically
+* Examples: Trade only during London session, Risk 1% per trade, Close positions after 5 pip drawdown, Avoid CPI volatility.
+
+**MetaTrader-style Charts**
+
+* Realtime candles
+* Drawing tools
+* Indicators
+* Multi-pair watchlists
+* Live trade overlays
+* TradingView integration
+
+**Analytics**
+
+* Performance metrics
+* Risk analysis
+* Portfolio insights
+* AI analytics
+* Trade history
+
+### Planned Frontend Stack
+
+Recommended: Next.js, React, TypeScript, TailwindCSS, Zustand, TanStack Query, TradingView Charts, WebSockets, ShadCN UI.
+
+### Long-Term Architecture Vision
 
 ```text
-"Create a high-frequency BTC scalping strategy"
+Frontend (Next.js)
+↓
+Realtime Gateway (WebSockets)
+↓
+AI Orchestrator
+↓
+Trading Engine
+↓
+Execution Engine
+↓
+Broker Connectors
+↓
+Exchanges/Brokers
+
 ```
 
-The AI will generate:
+---
 
-* indicators
-* entry logic
-* exit logic
-* risk logic
-* executable strategy files
+## Future Platform Features
 
-automatically.
+Potential future implementations:
+
+* Voice commands
+* Telegram integration
+* Discord alerts
+* Strategy marketplace
+* Replay mode
+* AI explainability
+* Portfolio AI
+* Multi-account routing
+* Copy trading
+* Social trading
 
 ---
 
-# Long-Term Vision
+## Current Conclusion
 
-The long-term objective is to build:
+The most important milestone has already been achieved:
+**YES — the bot truly works.**
 
-```text
-GPT for algorithmic trading
+The current engine already:
+
+* Processes real market data
+* Generates strategy signals
+* Uses live AI validation
+* Executes paper trades
+* Runs fully async
+* Uses Docker infrastructure
+* Uses PostgreSQL + Redis
+
+The next phase is transforming the engine into a complete AI trading platform.
+"""
+
+with open("README.md", "w", encoding="utf-8") as f:
+f.write(content)
+
 ```
+Tu archivo MD está listo.
+[file-tag: code-generated-file-0-1778820461157704110]
 
-A complete AI-native trading operating system capable of:
+Aquí tienes el archivo `README.md` generado con todo el contenido del proyecto estructurado correctamente para que puedas guardarlo directamente en tu repositorio.
 
-* autonomous strategy generation
-* portfolio management
-* conversational control
-* multi-agent coordination
-* live execution
-* self-optimization
-
----
-
-# Current Status
-
-## Infrastructure
-
-COMPLETE
-
-## Backend Engine
-
-COMPLETE
-
-## Async Runtime
-
-COMPLETE
-
-## Trading Core
-
-COMPLETE
-
-## Product Layer / Frontend
-
-IN PROGRESS
-
-## AI Conversational Platform
-
-PLANNED
-
----
-
-# Important Notes
-
-This project is currently under active development.
-
-Use:
-
-* paper trading
-* Binance testnet
-* sandbox environments
-
-before enabling real trading.
-
-Never use real funds before:
-
-* validating strategies
-* validating risk controls
-* testing execution
-* testing failover behavior
-* validating AI decisions
-
----
-
-# License
-
-Private / Internal Development
+```
