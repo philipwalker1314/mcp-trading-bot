@@ -1,4 +1,6 @@
-trading infrastructure with:
+# MCP Trading Bot
+
+Trading infrastructure with:
 
 - FastAPI
 - Async execution engine
@@ -215,6 +217,7 @@ LOG_LEVEL=INFO
 - **Swagger Docs:** http://localhost:8000/docs
 - **Health Check:** http://localhost:8000/health
 - **Status:** http://localhost:8000/status
+- **Frontend:** http://localhost:3000
 
 ### API Endpoints
 
@@ -337,6 +340,57 @@ metrics         — general metrics store
 
 ---
 
+### Phase 3 ✅ — Frontend Dashboard (Complete)
+
+Production-grade trading dashboard built with Next.js 14, connected to the backend via WebSockets and REST API.
+
+**Stack:**
+
+- Next.js 14 App Router + TypeScript
+- Zustand — global state management
+- TradingView Lightweight Charts — live candlestick chart
+- JetBrains Mono + IBM Plex Mono — terminal aesthetic
+- Tailwind CSS — utility styling
+
+**Features:**
+
+- **StatusBar** — live BTC/USDT price, WebSocket status (POS/MKT/SYS), bot running indicator
+- **StatsBar** — open positions count, unrealized PnL, realized PnL, total exposure, paper mode indicator
+- **PriceChart** — BTC/USDT 1m candlestick chart seeded from Binance public API, updates with live price on every tick
+- **PositionsPanel** — real-time position table with live PnL calculated from market feed, flash animations on PnL change, manual close per position
+- **EmergencyButton** — double-confirm emergency close all, disabled when no open positions
+
+**WebSocket connections:**
+
+- `/ws/positions` — position lifecycle events + snapshot on connect
+- `/ws/market` — live price ticks for PnL calculation
+- `/ws/system` — emergency stop alerts
+
+**Architecture:**
+
+```
+Browser
+↓
+usePositions / useMarket / useSystem (hooks)
+↓
+Zustand store (global state)
+↓
+StatusBar + StatsBar + PriceChart + PositionsPanel
+```
+
+Lives at: `frontend/` — runs as separate Docker service on port 3000.
+
+**Bugs fixed during implementation:**
+
+| File | Bug | Fix |
+|------|-----|-----|
+| `app/main.py` | CORS blocked all frontend requests | Added `CORSMiddleware` with `allow_origins=["http://localhost:3000"]` |
+| `frontend/app/page.tsx` | PriceChart crashed on SSR — `window` not available | Wrapped with `next/dynamic` + `ssr: false` |
+| `frontend/components/analytics/StatsBar.tsx` | File had wrong content (PriceChart code) — copy error | Replaced with correct StatsBar implementation |
+| `frontend/components/chart/PriceChart.tsx` | Chart rendered white — transparent background not supported | Changed `background.color` from `transparent` to `#080c0f` |
+
+---
+
 ## Current Tech Stack
 
 ### Backend
@@ -347,6 +401,13 @@ metrics         — general metrics store
 - Redis 7
 - Docker + Docker Compose
 - Structlog (structured JSON logging)
+
+### Frontend
+- Next.js 14 App Router + TypeScript
+- Zustand (global state)
+- TradingView Lightweight Charts
+- Tailwind CSS
+- JetBrains Mono + IBM Plex Mono
 
 ### Trading
 - Binance API via CCXT
@@ -460,6 +521,26 @@ mcp-trading-bot/
 │       ├── helpers.py
 │       └── validators.py
 │
+├── frontend/                             ← Next.js 14 dashboard (port 3000)
+│   ├── app/
+│   │   └── page.tsx
+│   ├── components/
+│   │   ├── analytics/
+│   │   │   └── StatsBar.tsx
+│   │   ├── chart/
+│   │   │   └── PriceChart.tsx
+│   │   ├── positions/
+│   │   │   └── PositionsPanel.tsx
+│   │   └── ui/
+│   │       ├── StatusBar.tsx
+│   │       └── EmergencyButton.tsx
+│   ├── hooks/
+│   │   ├── usePositions.ts
+│   │   ├── useMarket.ts
+│   │   └── useSystem.ts
+│   └── store/
+│       └── index.ts                      ← Zustand global store
+│
 ├── strategies/
 │   ├── examples/
 │   │   └── ema_rsi_strategy.py
@@ -545,21 +626,13 @@ SL/TP/trailing stop monitor, EventBus, WebSocket layer, broker reconciliation.
 Post-launch bugs fixed and performance optimized.
 **Status: Complete and verified working.**
 
-### Phase 3 🔲 Frontend Dashboard ← Next Priority
-The backend is fully ready. The frontend does not exist yet.
+### Phase 3 ✅ Frontend Dashboard
+Production-grade Next.js 14 dashboard. Live candlestick chart, real-time positions panel,
+WebSocket connections to all three backend streams, emergency close, paper mode indicator.
+Post-launch bugs fixed (CORS, SSR crash, copy error, chart background).
+**Status: Complete and verified working.**
 
-What is needed:
-- Next.js + React + TypeScript + TailwindCSS + ShadCN UI
-- Live positions panel connected via WebSocket (`/ws/positions`)
-- Open / close trade controls per position
-- Emergency close all button
-- Realtime PnL display
-- TradingView Lightweight Charts integration
-- Trade history table with filters
-- Analytics dashboard (winrate, drawdown, profit factor, equity curve)
-- AI Copilot chatbox (Phase 6 backend feeds this)
-
-### Phase 4 🔲 Analytics Engine
+### Phase 4 🔲 Analytics Engine ← Next Priority
 The `daily_metrics` table exists in the DB but the rollup job is not implemented yet.
 
 What is needed:
@@ -686,7 +759,7 @@ Exchanges / Brokers
 
 ## Current Conclusion
 
-Phase 1 and Phase 2 are complete and verified working in production (Docker).
+Phases 1, 2, and 3 are complete and verified working in production (Docker).
 
 The system currently:
 - Processes real market data via Binance WebSocket streams
@@ -696,7 +769,8 @@ The system currently:
 - Persists positions, fills, and audit trail to PostgreSQL
 - Monitors open positions for SL/TP/trailing stop in real time
 - Broadcasts live updates via WebSocket to any connected frontend
+- Displays a live trading dashboard (Next.js 14) with real-time chart, positions, PnL, and emergency controls
 - Runs fully async inside Docker infrastructure
 - Optimized: PnL in-memory, DB writes minimized, trailing stop throttled, reconciliation skipped in paper trading, strategy loader cached
 
-**The next milestone is Phase 3 — the frontend dashboard.**
+**The next milestone is Phase 4 — the Analytics Engine.**
