@@ -1,6 +1,4 @@
-# MCP Trading Bot
-
-AI-powered autonomous trading infrastructure with:
+ trading infrastructure with:
 
 - FastAPI
 - Async execution engine
@@ -205,6 +203,10 @@ LOG_LEVEL=INFO
 > **ENABLE_TRADING** — `false` by default so infrastructure boots safely without
 > executing trades. Set to `true` to activate the trading bot.
 
+> **DEBUG** — keep `false` in production. When `true`, SQLAlchemy logs every SQL
+> query which generates significant noise. SQL echo is hardcoded to `False`
+> regardless of this flag.
+
 ---
 
 ## Application URLs
@@ -315,6 +317,17 @@ signals         — strategy signal history
 metrics         — general metrics store
 ```
 
+**Bugs fixed post-launch:**
+
+| File | Bug | Fix |
+|------|-----|-----|
+| `broker/reconciliation.py` | `too many values to unpack` on Binance balance loop | Iterate `balances` as list of dicts, not tuples |
+| `trading/trading_bot.py` | `NoneType has no attribute get_latest_price` | Pass `market_engine` directly to fallback in `__init__`, not in `start()` |
+| `lifecycle/position_monitor.py` | `object float can't be used in await expression` | `get_latest_price()` is synchronous — removed incorrect `await` |
+| `database.py` | SQL echo flooding logs | Hardcoded `echo=False` regardless of DEBUG flag |
+| `lifecycle/trade_lifecycle_service.py` | DB write on every price tick | PnL now tracked in-memory; DB flush only every 60 seconds |
+| `trading_bot.py` | Fallback polling too aggressive | `interval_seconds` increased from 2s to 10s |
+
 ---
 
 ## Current Tech Stack
@@ -341,6 +354,19 @@ metrics         — general metrics store
 - DeepSeek `deepseek-v4-flash`
 - Trade signal validation (BUY / SELL / HOLD)
 - Thinking mode explicitly disabled — deterministic fast responses
+
+---
+
+## Performance Notes
+
+The system is optimized to minimize unnecessary I/O:
+
+- **SQL echo disabled** — SQLAlchemy never logs queries in any environment
+- **PnL in-memory cache** — unrealized PnL calculated in RAM, flushed to DB every 60s
+- **Tick interval** — fallback ticker polls every 10s (not every 2s)
+- **AI called on signals only** — DeepSeek is never called on HOLD signals or price ticks
+
+This keeps DB writes low and logs clean even with many open positions.
 
 ---
 
@@ -403,12 +429,12 @@ mcp-trading-bot/
 │   │   │   └── market_data_engine.py     ← WebSocket + candle cache
 │   │   │
 │   │   ├── lifecycle/
-│   │   │   ├── trade_lifecycle_service.py
-│   │   │   ├── position_monitor.py
+│   │   │   ├── trade_lifecycle_service.py ← PnL in-memory cache + 60s DB flush
+│   │   │   ├── position_monitor.py        ← Sync get_latest_price, None guard
 │   │   │   └── pnl_engine.py
 │   │   │
 │   │   └── broker/
-│   │       └── reconciliation.py
+│   │       └── reconciliation.py          ← Fixed Binance balance loop
 │   │
 │   ├── websocket/
 │   │   └── manager.py                    ← WS ConnectionManager + endpoints
@@ -497,6 +523,7 @@ Basic async trading pipeline. Market data → Indicators → Strategy → AI →
 ### Phase 2 ✅ Trade Lifecycle & Persistence
 Production-grade lifecycle and persistence. Positions, fills, audit trail, PnL engine,
 SL/TP/trailing stop monitor, EventBus, WebSocket layer, broker reconciliation.
+Post-launch bugs fixed and performance optimized.
 **Status: Complete and verified working.**
 
 ### Phase 3 🔲 Frontend Dashboard ← Next Priority
@@ -640,15 +667,16 @@ Exchanges / Brokers
 
 ## Current Conclusion
 
-Phase 1 and Phase 2 are complete and verified working.
+Phase 1 and Phase 2 are complete and verified working in production (Docker).
 
 The system currently:
-- Processes real market data via WebSocket streams
+- Processes real market data via Binance WebSocket streams
 - Generates strategy signals on every candle close
 - Validates trades with DeepSeek AI (`deepseek-v4-flash`, thinking disabled)
 - Persists positions, fills, and audit trail to PostgreSQL
 - Monitors open positions for SL/TP/trailing stop in real time
 - Broadcasts live updates via WebSocket to any connected frontend
 - Runs fully async inside Docker infrastructure
+- Optimized: PnL tracked in-memory, DB writes minimized, SQL logging off
 
 **The next milestone is Phase 3 — the frontend dashboard.**
