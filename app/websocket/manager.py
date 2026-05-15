@@ -161,35 +161,56 @@ router = APIRouter(tags=["websocket"])
 
 
 @router.websocket("/ws/positions")
-async def positions_ws(
-    websocket: WebSocket,
-    lifecycle: TradeLifecycleService = None,  # injected via app.state
-):
+async def positions_ws(websocket: WebSocket):
     """
     Real-time position updates.
     On connect: sends snapshot of all open positions.
     Ongoing: receives position lifecycle events.
+
+    NOTE: lifecycle is pulled from app.state — FastAPI does not
+    support arbitrary class types as WebSocket endpoint parameters.
     """
     await ws_manager.connect(websocket, "positions")
+
     try:
-        # Send initial snapshot
+        # Pull lifecycle service from app state (set in main.py lifespan)
+        lifecycle: TradeLifecycleService | None = getattr(
+            websocket.app.state, "lifecycle", None
+        )
+
+        # Send initial snapshot of open positions
         if lifecycle:
-            positions = await lifecycle.get_open_positions()
+            try:
+                positions = await lifecycle.get_open_positions()
+                await websocket.send_json({
+                    "event": "snapshot",
+                    "payload": [
+                        TradeLifecycleService._position_to_dict(p)
+                        for p in positions
+                    ],
+                })
+            except Exception as e:
+                logger.error("ws_snapshot_error", error=str(e))
+                await websocket.send_json({
+                    "event": "snapshot",
+                    "payload": [],
+                })
+        else:
+            # Trading not enabled — send empty snapshot
             await websocket.send_json({
                 "event": "snapshot",
-                "payload": [
-                    TradeLifecycleService._position_to_dict(p)
-                    for p in positions
-                ],
+                "payload": [],
             })
 
-        # Keep connection alive (events pushed by handlers)
+        # Keep connection alive — events are pushed by EventBus handlers
         while True:
-            # heartbeat
             await asyncio.sleep(30)
             await websocket.send_json({"event": "ping"})
 
     except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, "positions")
+    except Exception as e:
+        logger.error("ws_positions_error", error=str(e))
         ws_manager.disconnect(websocket, "positions")
 
 
@@ -206,6 +227,9 @@ async def market_ws(websocket: WebSocket):
             await websocket.send_json({"event": "ping"})
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket, "market")
+    except Exception as e:
+        logger.error("ws_market_error", error=str(e))
+        ws_manager.disconnect(websocket, "market")
 
 
 @router.websocket("/ws/system")
@@ -220,4 +244,7 @@ async def system_ws(websocket: WebSocket):
             await asyncio.sleep(30)
             await websocket.send_json({"event": "ping"})
     except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, "system")
+    except Exception as e:
+        logger.error("ws_system_error", error=str(e))
         ws_manager.disconnect(websocket, "system")

@@ -75,8 +75,13 @@ Trade setup:
                     },
                 ],
                 temperature=0,
-		top_p=0.1,
+                top_p=0.1,
                 max_tokens=20,
+                extra_body={
+                    "thinking": {
+                        "type": "disabled",
+                    },
+                },
             )
 
             logger.info(
@@ -103,26 +108,6 @@ Trade setup:
 
             if not raw_content:
 
-                if hasattr(
-                    message,
-                    "reasoning_content",
-                ):
-
-                    raw_content = (
-                        message.reasoning_content
-                    )
-
-            if not raw_content:
-
-                raw_content = str(message)
-
-            logger.info(
-                "raw_ai_response",
-                response=raw_content,
-            )
-
-            if not raw_content:
-
                 logger.warning(
                     "empty_ai_response",
                 )
@@ -135,10 +120,7 @@ Trade setup:
                 .upper()
             )
 
-            if (
-                content
-                not in self.VALID_RESPONSES
-            ):
+            if content not in self.VALID_RESPONSES:
 
                 logger.warning(
                     "invalid_ai_response",
