@@ -1,4 +1,3 @@
-	
 import asyncio
 import json
 from collections import defaultdict
@@ -50,8 +49,6 @@ class InProcessBus:
     """
     Fast, synchronous, in-process pub/sub.
     Zero latency. Does NOT survive restarts.
-    Used for: WebSocket broadcast, metrics updates,
-    risk manager sync.
     """
 
     def __init__(self):
@@ -61,12 +58,11 @@ class InProcessBus:
         self._handlers[event_type].append(handler)
         logger.debug(
             "handler_subscribed",
-            event=event_type,
+            event_type=event_type,       # ← renamed from 'event' to 'event_type'
             handler=handler.__name__,
         )
 
     def subscribe_all(self, handler: Callable):
-        """Subscribe to every event type."""
         self.subscribe("*", handler)
 
     async def publish(self, event: Event):
@@ -80,7 +76,7 @@ class InProcessBus:
             except Exception as e:
                 logger.error(
                     "in_process_handler_error",
-                    event=event.type,
+                    event_type=event.type,   # ← renamed
                     handler=handler.__name__,
                     error=str(e),
                 )
@@ -94,13 +90,10 @@ class RedisStreamPublisher:
     """
     Publishes events to Redis Streams.
     Durable, replayable, cross-service.
-
-    Stream key format: trading:events:{event_type}
-    e.g. trading:events:trade.opened
     """
 
     STREAM_PREFIX = "trading:events"
-    MAXLEN        = 10_000  # keep last 10k events per stream
+    MAXLEN        = 10_000
 
     def __init__(self, redis_client: aioredis.Redis):
         self.redis = redis_client
@@ -117,7 +110,7 @@ class RedisStreamPublisher:
             logger.debug(
                 "redis_stream_published",
                 stream=stream_key,
-                event_type=event.type,
+                event_type=event.type,   # ← renamed
             )
         except Exception as e:
             logger.error(
@@ -132,20 +125,6 @@ class RedisStreamPublisher:
 # ─────────────────────────────────────────────
 
 class RedisStreamConsumer:
-    """
-    Consumes events from a Redis Stream with
-    consumer group semantics (at-least-once delivery).
-
-    Usage:
-        consumer = RedisStreamConsumer(
-            redis=redis_client,
-            stream="trading:events:trade.closed",
-            group="analytics_service",
-            consumer_name="analytics_worker_1",
-            handler=on_trade_closed,
-        )
-        await consumer.start()
-    """
 
     def __init__(
         self,
@@ -204,7 +183,6 @@ class RedisStreamConsumer:
                             data = json.loads(fields[b"data"])
                             event = Event.from_dict(data)
                             await self.handler(event)
-                            # acknowledge after successful processing
                             await self.redis.xack(
                                 self.stream, self.group, message_id
                             )
@@ -235,16 +213,8 @@ class RedisStreamConsumer:
 
 class EventBus:
     """
-    Public façade that combines in-process and
+    Public façade combining in-process and
     Redis Streams publishing behind a single API.
-
-    publish() → in-process handlers (immediate)
-              → Redis Stream (durable)
-
-    As the system scales:
-    - Add more Redis consumer groups
-    - Each group = independent service
-    - In-process stays for low-latency paths
     """
 
     def __init__(self, redis_client: aioredis.Redis | None = None):
@@ -255,7 +225,6 @@ class EventBus:
         )
 
     def subscribe(self, event_type: str, handler: Callable):
-        """Register an in-process handler."""
         self._in_process.subscribe(event_type, handler)
 
     def subscribe_all(self, handler: Callable):
@@ -267,11 +236,6 @@ class EventBus:
         payload: Any,
         source: str = "trading_engine",
     ):
-        """
-        Publish an event to all subscribers.
-        payload can be a dict, a model instance,
-        or any serializable object.
-        """
         if hasattr(payload, "__dict__"):
             payload_dict = {
                 k: str(v) for k, v in payload.__dict__.items()
@@ -290,13 +254,11 @@ class EventBus:
 
         logger.debug(
             "event_published",
-            event_type=event_type,
+            event_type=event_type,   # ← renamed
         )
 
-        # in-process: immediate, fire-and-forget
         await self._in_process.publish(event)
 
-        # Redis: durable, async
         if self._redis_pub:
             await self._redis_pub.publish(event)
 
@@ -307,7 +269,6 @@ class EventBus:
         consumer_name: str,
         handler: Callable,
     ) -> RedisStreamConsumer | None:
-        """Factory for Redis Stream consumers."""
         if not self._redis_pub:
             logger.warning(
                 "redis_not_configured_skipping_consumer",
@@ -327,7 +288,6 @@ class EventBus:
 
 # ─────────────────────────────────────────────
 # Event type constants
-# Centralised to avoid magic strings
 # ─────────────────────────────────────────────
 
 class Events:
@@ -351,4 +311,3 @@ class Events:
     # Market data
     MARKET_TICK      = "market.tick"
     CANDLE_CLOSED    = "market.candle_closed"
-

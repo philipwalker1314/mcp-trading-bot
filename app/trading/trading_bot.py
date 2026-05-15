@@ -22,9 +22,7 @@ from app.logger import get_logger
 from app.services.binance_service import BinanceService
 from app.trading.ai_filter import AIFilter
 from app.trading.broker.reconciliation import BrokerReconciliationService
-from app.trading.engines.market_data_engine import (
-    MarketDataEngine,
-)
+from app.trading.engines.market_data_engine import MarketDataEngine
 from app.trading.lifecycle.position_monitor import (
     PositionMonitor,
     PositionMonitorFallback,
@@ -44,11 +42,11 @@ class TradingBot:
     def __init__(self):
 
         # ── Core infrastructure ──────────────
-        self.event_bus  = EventBus()   # Redis client injected in main.py
-        self.binance    = BinanceService()
+        self.event_bus = EventBus()
+        self.binance = BinanceService()
 
         # ── Lifecycle (central hub) ──────────
-        self.lifecycle  = TradeLifecycleService(
+        self.lifecycle = TradeLifecycleService(
             session_factory=AsyncSessionLocal,
             event_bus=self.event_bus,
         )
@@ -70,15 +68,15 @@ class TradingBot:
         # Paper trading fallback (emits synthetic ticks)
         self.ticker_fallback = PositionMonitorFallback(
             event_bus=self.event_bus,
-            market_data_service=None,  # set after market engine starts
+            market_data_service=None,
             symbols=SYMBOLS,
             interval_seconds=2.0,
         )
 
         # ── Strategy ─────────────────────────
         self.strategy_loader = StrategyLoader()
-        self.ai_filter       = AIFilter()
-        self.risk_manager    = RiskManager()
+        self.ai_filter = AIFilter()
+        self.risk_manager = RiskManager()
 
         # ── Broker reconciliation ────────────
         self.reconciliation = BrokerReconciliationService(
@@ -102,8 +100,14 @@ class TradingBot:
             self._on_candle_closed,
         )
 
-        # 3. Run startup reconciliation
-        await self.reconciliation.run()
+        # 3. Run startup reconciliation with timeout
+        # so a bad API key doesn't block the bot from starting
+        try:
+            await asyncio.wait_for(self.reconciliation.run(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("reconciliation_startup_timeout_skipped")
+        except Exception as e:
+            logger.warning("reconciliation_startup_skipped", error=str(e))
 
         # 4. Start market data engine (WebSocket streams)
         self._tasks.append(
@@ -163,7 +167,7 @@ class TradingBot:
         Runs all enabled strategies on that symbol.
         """
         payload = event.payload
-        symbol  = payload.get("symbol")
+        symbol = payload.get("symbol")
 
         if not symbol:
             return
@@ -224,22 +228,22 @@ class TradingBot:
                 if not current_price:
                     continue
 
-                stop_pct   = getattr(strategy, "stop_loss_percent",   0.02)
+                stop_pct = getattr(strategy, "stop_loss_percent", 0.02)
                 target_pct = getattr(strategy, "take_profit_percent", 0.04)
-                trail_pct  = getattr(strategy, "trailing_stop_percent", None)
+                trail_pct = getattr(strategy, "trailing_stop_percent", None)
 
                 if signal == "BUY":
-                    stop_loss   = current_price * (1 - stop_pct)
+                    stop_loss = current_price * (1 - stop_pct)
                     take_profit = current_price * (1 + target_pct)
                 else:
-                    stop_loss   = current_price * (1 + stop_pct)
+                    stop_loss = current_price * (1 + stop_pct)
                     take_profit = current_price * (1 - target_pct)
 
                 position = await self.lifecycle.open_position(
                     symbol=symbol,
                     side=signal,
                     entry_price=current_price,
-                    quantity=0.001,  # TODO: risk-based sizing
+                    quantity=0.001,
                     strategy_name=strategy_name,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
