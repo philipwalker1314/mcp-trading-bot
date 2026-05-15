@@ -80,14 +80,14 @@ class Settings(BaseSettings):
     # NVIDIA
     # =====================================================
 
-    NVIDIA_API_KEY: str = "CHANGE_ME"
+    DEEPSEEK_API_KEY: str = "CHANGE_ME"
 
-    NVIDIA_BASE_URL: str = (
-        "https://integrate.api.nvidia.com/v1"
+    DEEPSEEK_BASE_URL: str = (
+        "https://api.deepseek.com"
     )
 
-    NVIDIA_MODEL: str = (
-        "meta/llama-3.1-70b-instruct"
+    DEEPSEEK_MODEL: str = (
+        "deepseek-v4-flash"
     )
 
     # =====================================================

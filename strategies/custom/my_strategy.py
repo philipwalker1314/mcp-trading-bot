@@ -8,7 +8,7 @@ class MyCustomStrategy(BaseStrategy):
     name = "my_custom_strategy"
 
     description = (
-        "Custom strategy example"
+        "Force test strategy"
     )
 
     timeframe = "1m"
@@ -22,12 +22,9 @@ class MyCustomStrategy(BaseStrategy):
 
         close_price = latest["close"]
 
-        open_price = latest["open"]
+        ema_20 = latest["ema_20"]
 
-        if close_price > open_price:
+        if close_price > ema_20:
             return "BUY"
 
-        if close_price < open_price:
-            return "SELL"
-
-        return "HOLD"
+        return "SELL"
