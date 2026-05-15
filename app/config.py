@@ -4,9 +4,7 @@ from typing import Literal
 from pydantic import Field
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
-from pydantic_settings import (
-    SettingsConfigDict,
-)
+from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -33,6 +31,11 @@ class Settings(BaseSettings):
     ] = "development"
 
     DEBUG: bool = True
+
+    # NEW:
+    # Prevent TradingBot from auto-starting
+    # while testing infrastructure/migrations
+    ENABLE_TRADING: bool = False
 
     API_HOST: str = "0.0.0.0"
 
@@ -77,7 +80,7 @@ class Settings(BaseSettings):
     PAPER_TRADING: bool = True
 
     # =====================================================
-    # NVIDIA
+    # NVIDIA / DEEPSEEK
     # =====================================================
 
     DEEPSEEK_API_KEY: str = "CHANGE_ME"
@@ -106,9 +109,11 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
 
-    @field_validator(
-        "MAX_RISK_PER_TRADE"
-    )
+    # =====================================================
+    # VALIDATORS
+    # =====================================================
+
+    @field_validator("MAX_RISK_PER_TRADE")
     @classmethod
     def validate_risk(
         cls,
@@ -122,6 +127,10 @@ class Settings(BaseSettings):
             )
 
         return value
+
+    # =====================================================
+    # CONNECTION HELPERS
+    # =====================================================
 
     @property
     def postgres_url(self):
