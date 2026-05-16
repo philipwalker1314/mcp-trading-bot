@@ -1,12 +1,13 @@
 """
-main.py — Phase 4 application entry point.
+main.py — Phase 5 application entry point.
 
 Startup sequence:
 1. Init DB
 2. Init Redis
 3. Init AnalyticsService + RollupTask
-4. Optionally start TradingBot runtime
-5. Register API routers + WebSocket endpoints
+4. Init StrategyConfigService
+5. Optionally start TradingBot runtime
+6. Register API routers + WebSocket endpoints
 
 Shutdown sequence:
 1. Stop RollupTask
@@ -26,6 +27,7 @@ from app.api.positions import (
     analytics_router,
     positions_router,
 )
+from app.api.strategies import strategies_router  # Phase 5
 from app.config import settings
 from app.database import (
     AsyncSessionLocal,
@@ -34,6 +36,7 @@ from app.database import (
 )
 from app.logger import get_logger
 from app.services.analytics_service import AnalyticsService
+from app.services.strategy_config_service import StrategyConfigService  # Phase 5
 from app.tasks.rollup import RollupTask
 from app.trading.trading_bot import TradingBot
 from app.websocket.manager import (
@@ -90,6 +93,17 @@ async def lifespan(app: FastAPI):
     await rollup_task.start()
 
     logger.info("analytics_service_initialized")
+
+    # =====================================================
+    # STRATEGY CONFIG SERVICE (Phase 5)
+    # =====================================================
+
+    strategy_config_service = StrategyConfigService(
+        session_factory=AsyncSessionLocal
+    )
+    app.state.strategy_config_service = strategy_config_service
+
+    logger.info("strategy_config_service_initialized")
 
     # =====================================================
     # OPTIONAL TRADING RUNTIME
@@ -220,6 +234,7 @@ app.add_middleware(
 
 app.include_router(positions_router)
 app.include_router(analytics_router)
+app.include_router(strategies_router)   # Phase 5
 app.include_router(ws_router)
 
 # =====================================================

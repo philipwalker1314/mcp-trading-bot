@@ -6,11 +6,15 @@ import { usePositions }    from '@/hooks/usePositions'
 import { useMarket }       from '@/hooks/useMarket'
 import { useSystem }       from '@/hooks/useSystem'
 import { useAnalytics }    from '@/hooks/useAnalytics'
+import { useStrategies }   from '@/hooks/useStrategies'
+import { useStrategiesStore } from '@/store/strategies'
 import { StatusBar }       from '@/components/system/StatusBar'
 import { StatsBar }        from '@/components/analytics/StatsBar'
 import { PositionsPanel }  from '@/components/positions/PositionsPanel'
 import { EmergencyButton } from '@/components/positions/EmergencyButton'
 import { MetricsPanel }    from '@/components/analytics/MetricsPanel'
+import { StrategyList }    from '@/components/strategies/StrategyList'
+import { StrategyEditor }  from '@/components/strategies/StrategyEditor'
 
 const PriceChart = dynamic(
   () => import('@/components/chart/PriceChart').then(m => m.PriceChart),
@@ -42,6 +46,7 @@ function WsProviders() {
   useMarket()
   useSystem()
   useAnalytics()
+  useStrategies()
   return null
 }
 
@@ -76,7 +81,21 @@ function TabButton({
 // ─────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'trading' | 'analytics'>('trading')
+  const [activeTab, setActiveTab] = useState<'trading' | 'analytics' | 'strategies'>('trading')
+
+  // Track "creating new strategy" state at page level so
+  // StrategyList's "New" button and StrategyEditor stay in sync
+  const [isCreating, setIsCreating] = useState(false)
+  const { setSelectedId } = useStrategiesStore()
+
+  function handleNewStrategy() {
+    setSelectedId(null)
+    setIsCreating(true)
+  }
+
+  function handleCancelNew() {
+    setIsCreating(false)
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -97,6 +116,11 @@ export default function Dashboard() {
           label="[ ANALYTICS ]"
           active={activeTab === 'analytics'}
           onClick={() => setActiveTab('analytics')}
+        />
+        <TabButton
+          label="[ STRATEGIES ]"
+          active={activeTab === 'strategies'}
+          onClick={() => setActiveTab('strategies')}
         />
       </div>
 
@@ -127,13 +151,30 @@ export default function Dashboard() {
       {activeTab === 'analytics' && (
         <div className="flex flex-1 overflow-hidden">
           {/* Equity chart — lado izquierdo */}
-	  <div className="flex-1 border-r border-terminal-border overflow-hidden" style={{ minHeight: 0 }}>
+          <div className="flex-1 border-r border-terminal-border overflow-hidden" style={{ minHeight: 0 }}>
             <EquityChart />
           </div>
 
           {/* Metrics panel — lado derecho */}
           <div className="w-[420px] overflow-hidden">
             <MetricsPanel />
+          </div>
+        </div>
+      )}
+
+      {/* Vista STRATEGIES */}
+      {activeTab === 'strategies' && (
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left: strategy list */}
+          <div className="w-[320px] border-r border-terminal-border overflow-hidden flex flex-col">
+            <StrategyList onNew={handleNewStrategy} />
+          </div>
+          {/* Right: editor / viewer */}
+          <div className="flex-1 overflow-auto">
+            <StrategyEditor
+              isCreating={isCreating}
+              onCancelNew={handleCancelNew}
+            />
           </div>
         </div>
       )}

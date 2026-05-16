@@ -1,12 +1,16 @@
 """
-TradingBot — Phase 2, optimized.
+TradingBot — Phase 5.
 
-Fixes applied in this version:
+Fixes applied in previous phases:
   Fix 1: risk manager now checks per-symbol (in risk_manager.py)
   Fix 2: trailing stop audit log throttled (in trade_lifecycle_service.py)
   Fix 3: _on_position_closed syncs risk_manager._open_symbols on close
   Fix 4: reconciliation skipped in paper trading (in reconciliation.py)
   Fix 5: strategy_loader uses mtime cache (in strategy_loader.py)
+
+Phase 5 changes:
+  - DBStrategyLoader replaces StrategyLoader
+  - Merges file strategies + compiled DB strategies on every candle
 
 Key order change:
   Old: strategy → AI → risk → open
@@ -26,6 +30,7 @@ from app.logger import get_logger
 from app.services.binance_service import BinanceService
 from app.trading.ai_filter import AIFilter
 from app.trading.broker.reconciliation import BrokerReconciliationService
+from app.trading.db_strategy_loader import DBStrategyLoader  # Phase 5
 from app.trading.engines.market_data_engine import MarketDataEngine
 from app.trading.lifecycle.position_monitor import (
     PositionMonitor,
@@ -33,7 +38,6 @@ from app.trading.lifecycle.position_monitor import (
 )
 from app.trading.lifecycle.trade_lifecycle_service import TradeLifecycleService
 from app.trading.risk_manager import RiskManager
-from app.trading.strategy_loader import StrategyLoader
 from app.websocket.manager import register_ws_handlers
 
 logger = get_logger("trading_bot")
@@ -77,10 +81,12 @@ class TradingBot:
             interval_seconds=10.0,
         )
 
-        # ── Strategy ─────────────────────────
-        self.strategy_loader = StrategyLoader()
-        self.ai_filter       = AIFilter()
-        self.risk_manager    = RiskManager()
+        # ── Strategy (Phase 5: DB + file merged) ─────────────────────
+        self.db_strategy_loader = DBStrategyLoader(
+            session_factory=AsyncSessionLocal,
+        )
+        self.ai_filter    = AIFilter()
+        self.risk_manager = RiskManager()
 
         # ── Broker reconciliation ────────────
         self.reconciliation = BrokerReconciliationService(
@@ -187,8 +193,8 @@ class TradingBot:
         if dataframe is None:
             return
 
-        # FIX 5: strategy_loader uses mtime cache — no disk hit if unchanged
-        strategies = self.strategy_loader.load_strategies()
+        # Phase 5: DBStrategyLoader merges file strategies + compiled DB strategies
+        strategies = await self.db_strategy_loader.load_strategies_async()
 
         for strategy_name, strategy in strategies.items():
             if not strategy.enabled:
