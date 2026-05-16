@@ -614,6 +614,66 @@ This is the correct architecture — AI validates strong signals, it does not ru
 
 ---
 
+### Phase 4 ✅ — Analytics Engine (Complete)
+
+Production-grade analytics engine fully operational.
+
+**Backend:**
+
+- **AnalyticsService** — `app/services/analytics_service.py`
+  - `run_daily_rollup(date)` — agrega posiciones cerradas del día en `daily_metrics`
+  - `get_equity_curve(days)` — serie diaria de PnL acumulado
+  - `get_sharpe_ratio(days)` — Sharpe ratio anualizado (252d, RF=0)
+  - `get_max_drawdown(days)` — peak-to-trough sobre equity curve en $ y %
+  - `get_ai_performance_metrics()` — win rate global + métricas del AI filter
+  - `get_trade_duration_stats()` — avg/min/max duración, desglose por close_reason
+  - `catchup_missing_days(days)` — rellena días faltantes al arrancar
+
+- **RollupTask** — `app/tasks/rollup.py`
+  - Catchup automático de 30 días al arrancar
+  - Loop que ejecuta rollup exactamente a medianoche UTC
+  - Asyncio puro — sin Celery ni APScheduler
+
+- **5 endpoints nuevos** en `analytics_router`:
+  - `GET /analytics/equity-curve?days=30`
+  - `GET /analytics/sharpe?days=30`
+  - `GET /analytics/drawdown?days=30`
+  - `GET /analytics/trade-stats`
+  - `GET /analytics/ai-performance`
+
+**Frontend:**
+
+- **EquityChart** — `frontend/components/analytics/EquityChart.tsx`
+  - TradingView Lightweight Charts área bajo la curva
+  - Color verde/rojo según PnL acumulado positivo/negativo
+  - Responsive con ResizeObserver
+
+- **MetricsPanel** — `frontend/components/analytics/MetricsPanel.tsx`
+  - Grid de métricas: Sharpe ratio, Max Drawdown, Win Rate, Total PnL
+  - Trades cerrados, duración media, desglose por razón de cierre
+  - Sección AI Filter: señales validadas, confianza media
+
+- **useAnalytics hook** — `frontend/hooks/useAnalytics.ts`
+  - Fetcha los 5 endpoints en paralelo con Promise.all
+  - Polling automático cada 60 segundos
+
+- **Zustand analytics store** — `frontend/store/analytics.ts`
+  - Estado tipado: equityCurve, sharpe, drawdown, tradeStats, aiPerformance
+
+- **Tab `[ ANALYTICS ]`** en `frontend/app/page.tsx`
+  - Navegación entre `[ TRADING ]` y `[ ANALYTICS ]` sin reload
+  - Layout: EquityChart (flex-1) + MetricsPanel (420px)
+
+**Bugs fixed post-launch:**
+
+| File | Bug | Fix |
+|------|-----|-----|
+| `app/services/analytics_service.py` | `KeyError: 'TradeEvent'` en scripts standalone — modelo no registrado en SQLAlchemy | Agregado `from app.models.trade_events import TradeEvent` al inicio del módulo |
+| `frontend/components/analytics/EquityChart.tsx` | Chart renderiza en blanco — `flex-1` sin `minHeight: 0` da altura 0 al ResizeObserver | Agregado `style={{ minHeight: 0 }}` al contenedor del chart y al div padre |
+| `alembic` | `DuplicateObject: type "signaltype" already exists` — tablas creadas por `init_db()` antes de correr migraciones | `alembic stamp head` para marcar migración inicial como aplicada sin ejecutarla |
+
+**Verificado en producción:**
+
 ## Roadmap
 
 ### Phase 1 ✅ Core Bot

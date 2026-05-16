@@ -1,16 +1,18 @@
 """
-main.py — Phase 2 application entry point.
+main.py — Phase 4 application entry point.
 
 Startup sequence:
 1. Init DB
 2. Init Redis
-3. Optionally start TradingBot runtime
-4. Register API routers + WebSocket endpoints
+3. Init AnalyticsService + RollupTask
+4. Optionally start TradingBot runtime
+5. Register API routers + WebSocket endpoints
 
 Shutdown sequence:
-1. Stop TradingBot
-2. Close DB
-3. Close Redis
+1. Stop RollupTask
+2. Stop TradingBot
+3. Close DB
+4. Close Redis
 """
 
 import asyncio
@@ -26,10 +28,13 @@ from app.api.positions import (
 )
 from app.config import settings
 from app.database import (
+    AsyncSessionLocal,
     close_db,
     init_db,
 )
 from app.logger import get_logger
+from app.services.analytics_service import AnalyticsService
+from app.tasks.rollup import RollupTask
 from app.trading.trading_bot import TradingBot
 from app.websocket.manager import (
     router as ws_router,
@@ -37,14 +42,15 @@ from app.websocket.manager import (
 
 logger = get_logger("main")
 
-trading_bot: TradingBot | None = None
-bot_task: asyncio.Task | None = None
+trading_bot:  TradingBot   | None = None
+bot_task:     asyncio.Task | None = None
+rollup_task:  RollupTask   | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    global trading_bot, bot_task
+    global trading_bot, bot_task, rollup_task
 
     logger.info(
         "application_starting",
@@ -72,6 +78,18 @@ async def lifespan(app: FastAPI):
     app.state.redis = redis_client
 
     logger.info("redis_initialized")
+
+    # =====================================================
+    # ANALYTICS SERVICE + ROLLUP TASK
+    # =====================================================
+
+    analytics = AnalyticsService(session_factory=AsyncSessionLocal)
+    app.state.analytics = analytics
+
+    rollup_task = RollupTask(analytics=analytics)
+    await rollup_task.start()
+
+    logger.info("analytics_service_initialized")
 
     # =====================================================
     # OPTIONAL TRADING RUNTIME
@@ -119,6 +137,13 @@ async def lifespan(app: FastAPI):
     logger.warning(
         "application_shutting_down"
     )
+
+    # Detener rollup task
+    if rollup_task:
+        try:
+            await rollup_task.stop()
+        except Exception as e:
+            logger.exception("rollup_task_shutdown_error", error=str(e))
 
     if trading_bot:
 
@@ -175,7 +200,7 @@ app = FastAPI(
 )
 
 # =====================================================
-# CORS — permite requests desde el frontend
+# CORS
 # =====================================================
 
 app.add_middleware(

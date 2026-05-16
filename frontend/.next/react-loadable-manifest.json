@@ -1,8 +1,20 @@
 {
+  "app/page.tsx -> @/components/analytics/EquityChart": {
+    "id": "app/page.tsx -> @/components/analytics/EquityChart",
+    "files": [
+      "static/chunks/_app-pages-browser_components_analytics_EquityChart_tsx.js"
+    ]
+  },
   "app/page.tsx -> @/components/chart/PriceChart": {
     "id": "app/page.tsx -> @/components/chart/PriceChart",
     "files": [
       "static/chunks/_app-pages-browser_components_chart_PriceChart_tsx.js"
+    ]
+  },
+  "components/analytics/EquityChart.tsx -> lightweight-charts": {
+    "id": "components/analytics/EquityChart.tsx -> lightweight-charts",
+    "files": [
+      "static/chunks/_app-pages-browser_node_modules_lightweight-charts_dist_lightweight-charts_development_mjs.js"
     ]
   },
   "components/chart/PriceChart.tsx -> lightweight-charts": {

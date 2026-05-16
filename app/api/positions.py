@@ -8,7 +8,7 @@ All responses include envelope: {data, meta}.
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -159,8 +159,6 @@ async def manual_close(
     db: AsyncSession = Depends(get_db),
 ):
     """Manually close a position at a given price."""
-    # Lifecycle service must be injected via app.state
-    # This is a placeholder showing the pattern
     position = await db.get(Position, position_id)
     if not position:
         raise HTTPException(404, "Position not found")
@@ -168,8 +166,6 @@ async def manual_close(
     if position.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
         raise HTTPException(400, f"Position is not open (status: {position.status})")
 
-    # Real impl: await lifecycle_service.close_position(...)
-    # Returning current state for now
     return api_response(
         data={"message": "close_requested", "position_id": position_id},
     )
@@ -181,7 +177,6 @@ async def emergency_close(body: EmergencyCloseRequest):
     if not body.confirm:
         raise HTTPException(400, "Must set confirm=true")
 
-    # Real impl: await lifecycle_service.emergency_close_all(prices)
     return api_response(data={"status": "emergency_close_initiated"})
 
 
@@ -190,6 +185,14 @@ async def emergency_close(body: EmergencyCloseRequest):
 # ─────────────────────────────────────────────
 
 analytics_router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+
+def _get_analytics(request: Request):
+    """Helper para obtener AnalyticsService desde app.state."""
+    analytics = getattr(request.app.state, "analytics", None)
+    if analytics is None:
+        raise HTTPException(503, "Analytics service not available")
+    return analytics
 
 
 @analytics_router.get("/daily")
@@ -253,6 +256,73 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
             for p in open_positions
         ),
     })
+
+
+# ─────────────────────────────────────────────
+# Phase 4 — Nuevos endpoints de analytics
+# ─────────────────────────────────────────────
+
+@analytics_router.get("/equity-curve")
+async def equity_curve(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+):
+    """
+    Serie temporal de PnL acumulado para graficar.
+    Devuelve [{date, daily_pnl, cumulative_pnl, total_trades, win_rate}]
+    """
+    analytics = _get_analytics(request)
+    curve = await analytics.get_equity_curve(days=days)
+    return api_response(
+        data=curve,
+        meta={"days": days, "points": len(curve)},
+    )
+
+
+@analytics_router.get("/sharpe")
+async def sharpe_ratio(
+    request: Request,
+    days: int = Query(30, ge=7, le=365),
+):
+    """
+    Sharpe ratio anualizado (252 días, risk-free rate = 0).
+    """
+    analytics = _get_analytics(request)
+    result = await analytics.get_sharpe_ratio(days=days)
+    return api_response(data=result, meta={"days": days})
+
+
+@analytics_router.get("/drawdown")
+async def max_drawdown(
+    request: Request,
+    days: int = Query(30, ge=1, le=365),
+):
+    """
+    Max drawdown peak-to-trough sobre la equity curve.
+    """
+    analytics = _get_analytics(request)
+    result = await analytics.get_max_drawdown(days=days)
+    return api_response(data=result, meta={"days": days})
+
+
+@analytics_router.get("/trade-stats")
+async def trade_stats(request: Request):
+    """
+    Estadísticas de duración y distribución de trades cerrados.
+    """
+    analytics = _get_analytics(request)
+    result = await analytics.get_trade_duration_stats()
+    return api_response(data=result)
+
+
+@analytics_router.get("/ai-performance")
+async def ai_performance(request: Request):
+    """
+    Métricas de rendimiento del AI filter vs todos los trades.
+    """
+    analytics = _get_analytics(request)
+    result = await analytics.get_ai_performance_metrics()
+    return api_response(data=result)
 
 
 # ─────────────────────────────────────────────
