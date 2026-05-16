@@ -692,18 +692,12 @@ WebSocket connections to all three backend streams, emergency close, paper mode 
 Post-launch bugs fixed (CORS, SSR crash, copy error, chart background).
 **Status: Complete and verified working.**
 
-### Phase 4 🔲 Analytics Engine ← Next Priority
-The `daily_metrics` table exists in the DB but the rollup job is not implemented yet.
-
-What is needed:
-- End-of-day aggregation job (populates `daily_metrics`)
-- Sharpe ratio calculation
-- Max drawdown tracking
-- Profit factor
-- Avg win / avg loss
-- Trade duration analytics
-- Equity curve data series
-- AI performance metrics (does AI validation actually improve results?)
+### Phase 4 ✅ Analytics Engine
+Production-grade analytics engine with end-of-day rollup, equity curve, and performance metrics.
+Sharpe ratio, max drawdown, trade duration stats, AI filter performance, five new REST endpoints,
+EquityChart + MetricsPanel in frontend Analytics tab. RollupTask runs at midnight UTC via asyncio.
+Post-launch bugs fixed (TradeEvent registration, EquityChart minHeight, alembic stamp).
+**Status: Complete and verified working.**
 
 ### Phase 5 🔲 Runtime Strategy Config System
 Currently strategies are hardcoded `.py` files. The goal is to eliminate this entirely.
