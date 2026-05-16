@@ -1,11 +1,9 @@
 """
 StrategyConfig — runtime strategy stored in DB as JSON config.
 
-Design decisions:
-- entry_rules / exit_rules are a list of Rule dicts evaluated by the compiler
-- indicators is a list of IndicatorConfig dicts passed to the indicator engine
-- version is bumped on every save; old snapshots kept in strategy_versions
-- enabled=False by default — must be explicitly activated
+Phase 7 additions:
+  ai_validation_required  — if False, skip AI entirely for this strategy
+  confidence_threshold    — signal strength above this → skip AI (0.0–1.0)
 """
 
 from datetime import datetime
@@ -37,7 +35,6 @@ class StrategyConfig(Base):
 
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False, default="1m")
 
-    # e.g. ["BTC/USDT"] or ["BTC/USDT", "ETH/USDT"]
     symbols: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
     # ── Risk ──────────────────────────────────
@@ -49,31 +46,25 @@ class StrategyConfig(Base):
     trailing_stop_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # ── Signal logic ──────────────────────────
-    # entry_rules example:
-    # [
-    #   {"indicator": "ema_8", "op": "crosses_above", "target": "ema_13"},
-    #   {"indicator": "rsi",   "op": "between",       "value_min": 40, "value_max": 65}
-    # ]
-    #
-    # Supported ops: gt, lt, gte, lte, eq, between, crosses_above, crosses_below
-    # All rules in the list are AND-ed together.
-    # For OR logic, use separate strategies.
 
     entry_rules: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
     exit_rules: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
-    # ── Indicators ────────────────────────────
-    # [
-    #   {"type": "ema", "period": 8,  "column": "ema_8"},
-    #   {"type": "ema", "period": 13, "column": "ema_13"},
-    #   {"type": "rsi", "period": 14, "column": "rsi"},
-    #   {"type": "macd"},
-    #   {"type": "atr",  "period": 14},
-    #   {"type": "volatility", "period": 20}
-    # ]
-
     indicators: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    # ── Phase 7: Selective AI Filter ──────────
+    # ai_validation_required=False  → skip AI for all signals from this strategy
+    # confidence_threshold          → skip AI when signal_strength >= threshold
+    #                                 0.75 = only call AI for weak/uncertain signals
+
+    ai_validation_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+
+    confidence_threshold: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.75
+    )
 
     # ── Audit ─────────────────────────────────
 
@@ -96,22 +87,24 @@ class StrategyConfig(Base):
 
     def to_dict(self) -> dict:
         return {
-            "id":                self.id,
-            "name":              self.name,
-            "description":       self.description,
-            "version":           self.version,
-            "enabled":           self.enabled,
-            "timeframe":         self.timeframe,
-            "symbols":           self.symbols,
-            "stop_loss_pct":     self.stop_loss_pct,
-            "take_profit_pct":   self.take_profit_pct,
-            "trailing_stop_pct": self.trailing_stop_pct,
-            "entry_rules":       self.entry_rules,
-            "exit_rules":        self.exit_rules,
-            "indicators":        self.indicators,
-            "created_at":        self.created_at.isoformat() if self.created_at else None,
-            "updated_at":        self.updated_at.isoformat() if self.updated_at else None,
-            "created_by":        self.created_by,
+            "id":                       self.id,
+            "name":                     self.name,
+            "description":              self.description,
+            "version":                  self.version,
+            "enabled":                  self.enabled,
+            "timeframe":                self.timeframe,
+            "symbols":                  self.symbols,
+            "stop_loss_pct":            self.stop_loss_pct,
+            "take_profit_pct":          self.take_profit_pct,
+            "trailing_stop_pct":        self.trailing_stop_pct,
+            "entry_rules":              self.entry_rules,
+            "exit_rules":               self.exit_rules,
+            "indicators":               self.indicators,
+            "ai_validation_required":   self.ai_validation_required,
+            "confidence_threshold":     self.confidence_threshold,
+            "created_at":               self.created_at.isoformat() if self.created_at else None,
+            "updated_at":               self.updated_at.isoformat() if self.updated_at else None,
+            "created_by":               self.created_by,
         }
 
     def to_snapshot(self) -> dict:
@@ -125,8 +118,6 @@ class StrategyVersion(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # FIX: ForeignKey declarado correctamente para que SQLAlchemy
-    # resuelva el relationship con StrategyConfig sin ambigüedad.
     strategy_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("strategy_configs.id", ondelete="CASCADE"),
@@ -136,14 +127,11 @@ class StrategyVersion(Base):
 
     version: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Full config snapshot at this version
     snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
 
     change_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    # ── Relationship ──────────────────────────
 
     strategy: Mapped["StrategyConfig"] = relationship(
         "StrategyConfig",

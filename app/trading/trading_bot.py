@@ -1,24 +1,24 @@
 """
-TradingBot — Phase 5.
+TradingBot — Phase 7: Selective AI Filter.
 
-Fixes applied in previous phases:
-  Fix 1: risk manager now checks per-symbol (in risk_manager.py)
-  Fix 2: trailing stop audit log throttled (in trade_lifecycle_service.py)
-  Fix 3: _on_position_closed syncs risk_manager._open_symbols on close
-  Fix 4: reconciliation skipped in paper trading (in reconciliation.py)
-  Fix 5: strategy_loader uses mtime cache (in strategy_loader.py)
+Phase 7 changes vs Phase 6:
+  - Imports SignalStrengthEvaluator + AITokenTracker
+  - _on_candle_closed: evaluates signal strength before AI call
+  - Strong signals (strength >= strategy.confidence_threshold) → skip AI
+  - Weak signals → call AI as before
+  - All calls logged to AITokenTracker for /ai-metrics endpoint
 
-Phase 5 changes:
-  - DBStrategyLoader replaces StrategyLoader
-  - Merges file strategies + compiled DB strategies on every candle
+Previous phases preserved:
+  Fix 1: risk manager checks per-symbol
+  Fix 2: trailing stop audit log throttled
+  Fix 3: _on_position_closed syncs risk_manager._open_symbols
+  Fix 4: reconciliation skipped in paper trading
+  Fix 5: strategy_loader uses mtime cache
+  Phase 5: DBStrategyLoader (file + DB strategies merged)
+  Phase 6: CopilotService
 
-Key order change:
-  Old: strategy → AI → risk → open
-  New: strategy → risk → AI → open
-  
-  Risk is cheap (in-memory). AI costs tokens.
-  Checking risk first eliminates AI calls for already-rejected trades
-  (e.g. symbol already open, max positions reached).
+Key execution order (unchanged from Phase 5/6):
+  strategy → risk → [strength eval] → AI (if needed) → open
 """
 
 import asyncio
@@ -29,8 +29,9 @@ from app.events.event_bus import EventBus, Events
 from app.logger import get_logger
 from app.services.binance_service import BinanceService
 from app.trading.ai_filter import AIFilter
+from app.trading.ai_token_tracker import ai_token_tracker
 from app.trading.broker.reconciliation import BrokerReconciliationService
-from app.trading.db_strategy_loader import DBStrategyLoader  # Phase 5
+from app.trading.db_strategy_loader import DBStrategyLoader
 from app.trading.engines.market_data_engine import MarketDataEngine
 from app.trading.lifecycle.position_monitor import (
     PositionMonitor,
@@ -38,11 +39,11 @@ from app.trading.lifecycle.position_monitor import (
 )
 from app.trading.lifecycle.trade_lifecycle_service import TradeLifecycleService
 from app.trading.risk_manager import RiskManager
+from app.trading.signal_strength_evaluator import SignalStrengthEvaluator
 from app.websocket.manager import register_ws_handlers
 
 logger = get_logger("trading_bot")
 
-# Add more symbols when ready: ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 SYMBOLS = ["BTC/USDT"]
 
 
@@ -54,7 +55,7 @@ class TradingBot:
         self.event_bus = EventBus()
         self.binance   = BinanceService()
 
-        # ── Lifecycle (central hub) ──────────
+        # ── Lifecycle ────────────────────────
         self.lifecycle = TradeLifecycleService(
             session_factory=AsyncSessionLocal,
             event_bus=self.event_bus,
@@ -81,12 +82,15 @@ class TradingBot:
             interval_seconds=10.0,
         )
 
-        # ── Strategy (Phase 5: DB + file merged) ─────────────────────
+        # ── Strategy ─────────────────────────
         self.db_strategy_loader = DBStrategyLoader(
             session_factory=AsyncSessionLocal,
         )
         self.ai_filter    = AIFilter()
         self.risk_manager = RiskManager()
+
+        # ── Phase 7: Signal strength evaluator ─
+        self.signal_evaluator = SignalStrengthEvaluator()
 
         # ── Broker reconciliation ────────────
         self.reconciliation = BrokerReconciliationService(
@@ -101,17 +105,11 @@ class TradingBot:
         logger.info("trading_bot_starting")
         self.running = True
 
-        # 1. Register WebSocket → EventBus bridge
         register_ws_handlers(self.event_bus)
 
-        # 2. Strategy execution on candle close
-        self.event_bus.subscribe(Events.CANDLE_CLOSED, self._on_candle_closed)
-
-        # FIX 3: sync risk_manager open_symbols when a position closes
-        # (covers SL/TP/trailing/emergency closes — not just manual)
+        self.event_bus.subscribe(Events.CANDLE_CLOSED,   self._on_candle_closed)
         self.event_bus.subscribe(Events.POSITION_CLOSED, self._on_position_closed)
 
-        # 3. Startup reconciliation (instant no-op in paper trading)
         try:
             await asyncio.wait_for(self.reconciliation.run(), timeout=10.0)
         except asyncio.TimeoutError:
@@ -119,37 +117,23 @@ class TradingBot:
         except Exception as e:
             logger.warning("reconciliation_startup_skipped", error=str(e))
 
-        # 4. Start market data engine
         self._tasks.append(
-            asyncio.create_task(
-                self.market_engine.start(),
-                name="market_data_engine",
-            )
+            asyncio.create_task(self.market_engine.start(), name="market_data_engine")
         )
 
-        # 5. Start position monitor
         await self.position_monitor.start()
 
-        # 6. Fallback ticker in paper trading
         if settings.PAPER_TRADING:
             self._tasks.append(
-                asyncio.create_task(
-                    self.ticker_fallback.start(),
-                    name="ticker_fallback",
-                )
+                asyncio.create_task(self.ticker_fallback.start(), name="ticker_fallback")
             )
 
-        # 7. Periodic reconciliation loop (skips internally in paper trading)
         self._tasks.append(
-            asyncio.create_task(
-                self._reconciliation_loop(),
-                name="reconciliation_loop",
-            )
+            asyncio.create_task(self._reconciliation_loop(), name="reconciliation_loop")
         )
 
         logger.info("trading_bot_started")
 
-        # Bot is event-driven — just stay alive
         while self.running:
             await asyncio.sleep(5)
 
@@ -176,7 +160,7 @@ class TradingBot:
         logger.debug("risk_manager_synced_on_close", symbol=symbol)
 
     # ─────────────────────────────────────────
-    # Strategy execution on candle close
+    # Strategy execution — Phase 7 selective AI
     # ─────────────────────────────────────────
 
     async def _on_candle_closed(self, event):
@@ -193,7 +177,6 @@ class TradingBot:
         if dataframe is None:
             return
 
-        # Phase 5: DBStrategyLoader merges file strategies + compiled DB strategies
         strategies = await self.db_strategy_loader.load_strategies_async()
 
         for strategy_name, strategy in strategies.items():
@@ -213,9 +196,7 @@ class TradingBot:
                     signal=signal,
                 )
 
-                # ── Risk check BEFORE AI ─────────────────────────────
-                # Cheap in-memory check. If rejected here, no AI call.
-                # FIX 1: validate_trade now also checks per-symbol guard.
+                # ── Risk check (cheap, in-memory) ─────────────────────
                 approved = await self.risk_manager.validate_trade(
                     symbol=symbol,
                     signal=signal,
@@ -231,13 +212,60 @@ class TradingBot:
                     )
                     continue
 
-                # ── AI validation ─────────────────────────────────────
-                # Only reached if risk approved. Saves tokens.
-                ai_signal = await self.ai_filter.confirm_trade(
-                    signal=signal,
-                    dataframe=dataframe,
-                    strategy_name=strategy_name,
-                )
+                # ── Phase 7: Signal strength evaluation ───────────────
+                # Read per-strategy AI config (with safe fallbacks for
+                # file-based strategies that don't have these attributes).
+                ai_required   = getattr(strategy, "ai_validation_required",  True)
+                threshold     = getattr(strategy, "confidence_threshold",     0.75)
+
+                strength = SignalStrengthEvaluator.evaluate(dataframe, signal)
+
+                # Decision tree:
+                #   1. ai_validation_required=False → always skip AI
+                #   2. strength >= threshold        → strong signal, skip AI
+                #   3. otherwise                    → call AI
+                skip_ai = (not ai_required) or (strength >= threshold)
+
+                if skip_ai:
+                    logger.info(
+                        "ai_filter_skipped",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        signal=signal,
+                        strength=strength,
+                        threshold=threshold,
+                        ai_required=ai_required,
+                    )
+                    ai_token_tracker.record_signal(
+                        symbol=symbol,
+                        signal=signal,
+                        strength=strength,
+                        skipped=True,
+                        ai_result=None,
+                    )
+                    ai_signal = signal  # trust the strategy directly
+
+                else:
+                    logger.info(
+                        "ai_filter_calling",
+                        strategy=strategy_name,
+                        symbol=symbol,
+                        signal=signal,
+                        strength=strength,
+                        threshold=threshold,
+                    )
+                    ai_signal = await self.ai_filter.confirm_trade(
+                        signal=signal,
+                        dataframe=dataframe,
+                        strategy_name=strategy_name,
+                    )
+                    ai_token_tracker.record_signal(
+                        symbol=symbol,
+                        signal=signal,
+                        strength=strength,
+                        skipped=False,
+                        ai_result=ai_signal,
+                    )
 
                 if ai_signal == "HOLD":
                     logger.info(
@@ -274,7 +302,6 @@ class TradingBot:
                     trailing_stop_pct=trail_pct,
                 )
 
-                # FIX 1: pass symbol so risk_manager tracks it
                 await self.risk_manager.register_trade(symbol=symbol)
 
                 logger.info(
@@ -283,6 +310,8 @@ class TradingBot:
                     symbol=symbol,
                     signal=signal,
                     entry=current_price,
+                    strength=strength,
+                    ai_skipped=skip_ai,
                 )
 
             except Exception as e:
@@ -300,7 +329,6 @@ class TradingBot:
         while self.running:
             try:
                 await asyncio.sleep(60)
-                # FIX 4: run() returns instantly in paper trading
                 await self.reconciliation.run()
             except asyncio.CancelledError:
                 break

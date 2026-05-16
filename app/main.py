@@ -1,20 +1,9 @@
 """
-main.py — Phase 6 application entry point.
+main.py — Phase 7 application entry point.
 
-Startup sequence:
-1. Init DB
-2. Init Redis
-3. Init AnalyticsService + RollupTask
-4. Init StrategyConfigService
-5. Init CopilotService          ← Phase 6
-6. Optionally start TradingBot runtime
-7. Register API routers + WebSocket endpoints
-
-Shutdown sequence:
-1. Stop RollupTask
-2. Stop TradingBot
-3. Close DB
-4. Close Redis
+Phase 7 addition:
+  - Import + register ai_metrics_router  (/ai-metrics)
+  - No other changes from Phase 6
 """
 
 import asyncio
@@ -29,7 +18,9 @@ from app.api.positions import (
     positions_router,
 )
 from app.api.strategies import strategies_router
-from app.api.copilot import copilot_router          # Phase 6
+from app.api.copilot    import copilot_router
+from app.api.ai_metrics import ai_metrics_router     # Phase 7
+from app.api.ai_toggle  import ai_toggle_router      # Phase 7
 from app.config import settings
 from app.database import (
     AsyncSessionLocal,
@@ -39,7 +30,7 @@ from app.database import (
 from app.logger import get_logger
 from app.services.analytics_service import AnalyticsService
 from app.services.strategy_config_service import StrategyConfigService
-from app.services.copilot_service import CopilotService  # Phase 6
+from app.services.copilot_service import CopilotService
 from app.tasks.rollup import RollupTask
 from app.trading.trading_bot import TradingBot
 from app.websocket.manager import (
@@ -68,7 +59,6 @@ async def lifespan(app: FastAPI):
     # =====================================================
 
     await init_db()
-
     logger.info("database_initialized")
 
     # =====================================================
@@ -80,9 +70,7 @@ async def lifespan(app: FastAPI):
         encoding="utf-8",
         decode_responses=True,
     )
-
     app.state.redis = redis_client
-
     logger.info("redis_initialized")
 
     # =====================================================
@@ -94,27 +82,24 @@ async def lifespan(app: FastAPI):
 
     rollup_task = RollupTask(analytics=analytics)
     await rollup_task.start()
-
     logger.info("analytics_service_initialized")
 
     # =====================================================
-    # STRATEGY CONFIG SERVICE (Phase 5)
+    # STRATEGY CONFIG SERVICE
     # =====================================================
 
     strategy_config_service = StrategyConfigService(
         session_factory=AsyncSessionLocal
     )
     app.state.strategy_config_service = strategy_config_service
-
     logger.info("strategy_config_service_initialized")
 
     # =====================================================
-    # COPILOT SERVICE (Phase 6)
+    # COPILOT SERVICE
     # =====================================================
 
     copilot = CopilotService()
     app.state.copilot = copilot
-
     logger.info("copilot_service_initialized")
 
     # =====================================================
@@ -123,12 +108,9 @@ async def lifespan(app: FastAPI):
 
     if settings.ENABLE_TRADING:
 
-        logger.warning(
-            "trading_runtime_enabled"
-        )
+        logger.warning("trading_runtime_enabled")
 
         trading_bot = TradingBot()
-
         trading_bot.event_bus._redis_pub = None
 
         app.state.lifecycle   = trading_bot.lifecycle
@@ -139,15 +121,11 @@ async def lifespan(app: FastAPI):
             name="trading_bot",
         )
 
-        logger.info(
-            "trading_bot_started"
-        )
+        logger.info("trading_bot_started")
 
     else:
 
-        logger.warning(
-            "trading_runtime_disabled"
-        )
+        logger.warning("trading_runtime_disabled")
 
         app.state.lifecycle   = None
         app.state.trading_bot = None
@@ -160,9 +138,7 @@ async def lifespan(app: FastAPI):
     # SHUTDOWN
     # =====================================================
 
-    logger.warning(
-        "application_shutting_down"
-    )
+    logger.warning("application_shutting_down")
 
     if rollup_task:
         try:
@@ -171,44 +147,26 @@ async def lifespan(app: FastAPI):
             logger.exception("rollup_task_shutdown_error", error=str(e))
 
     if trading_bot:
-
         try:
             await trading_bot.stop()
-
         except Exception as e:
-
-            logger.exception(
-                "trading_bot_shutdown_error",
-                error=str(e),
-            )
+            logger.exception("trading_bot_shutdown_error", error=str(e))
 
     if bot_task:
-
         try:
             bot_task.cancel()
-
         except Exception:
             pass
 
     try:
         await redis_client.close()
-
     except Exception as e:
-
-        logger.exception(
-            "redis_shutdown_error",
-            error=str(e),
-        )
+        logger.exception("redis_shutdown_error", error=str(e))
 
     try:
         await close_db()
-
     except Exception as e:
-
-        logger.exception(
-            "database_shutdown_error",
-            error=str(e),
-        )
+        logger.exception("database_shutdown_error", error=str(e))
 
     logger.info("application_stopped")
 
@@ -246,73 +204,51 @@ app.add_middleware(
 app.include_router(positions_router)
 app.include_router(analytics_router)
 app.include_router(strategies_router)
-app.include_router(copilot_router)       # Phase 6
+app.include_router(copilot_router)
+app.include_router(ai_metrics_router)   # Phase 7
+app.include_router(ai_toggle_router)    # Phase 7
 app.include_router(ws_router)
+
 
 # =====================================================
 # ROOT
 # =====================================================
 
-
 @app.get("/")
 async def root():
-
     return {
-        "app": settings.APP_NAME,
+        "app":     settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "status": "running",
+        "status":  "running",
     }
-
-
-# =====================================================
-# HEALTH
-# =====================================================
 
 
 @app.get("/health")
 async def health():
-
     return {
-        "status": "healthy",
-        "trading_enabled": settings.ENABLE_TRADING,
+        "status":              "healthy",
+        "trading_enabled":     settings.ENABLE_TRADING,
         "trading_bot_running": (
-            trading_bot.running
-            if trading_bot
-            else False
+            trading_bot.running if trading_bot else False
         ),
     }
 
 
-# =====================================================
-# STATUS
-# =====================================================
-
-
 @app.get("/status")
 async def status():
-
     open_count = 0
 
     if trading_bot:
-
         try:
-            positions = (
-                await trading_bot.lifecycle.get_open_positions()
-            )
-
+            positions  = await trading_bot.lifecycle.get_open_positions()
             open_count = len(positions)
-
         except Exception as e:
-
-            logger.exception(
-                "status_endpoint_error",
-                error=str(e),
-            )
+            logger.exception("status_endpoint_error", error=str(e))
 
     return {
-        "environment": settings.ENVIRONMENT,
-        "paper_trading": settings.PAPER_TRADING,
-        "testnet": settings.BINANCE_TESTNET,
+        "environment":    settings.ENVIRONMENT,
+        "paper_trading":  settings.PAPER_TRADING,
+        "testnet":        settings.BINANCE_TESTNET,
         "trading_enabled": settings.ENABLE_TRADING,
         "open_positions": open_count,
     }
