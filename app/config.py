@@ -1,7 +1,6 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
@@ -32,9 +31,6 @@ class Settings(BaseSettings):
 
     DEBUG: bool = True
 
-    # NEW:
-    # Prevent TradingBot from auto-starting
-    # while testing infrastructure/migrations
     ENABLE_TRADING: bool = False
 
     API_HOST: str = "0.0.0.0"
@@ -85,13 +81,11 @@ class Settings(BaseSettings):
 
     DEEPSEEK_API_KEY: str = "CHANGE_ME"
 
-    DEEPSEEK_BASE_URL: str = (
-        "https://api.deepseek.com"
-    )
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
-    DEEPSEEK_MODEL: str = (
-        "deepseek-v4-flash"
-    )
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+
+    AI_TRADING_ENABLED: bool = True
 
     # =====================================================
     # RISK
@@ -115,17 +109,9 @@ class Settings(BaseSettings):
 
     @field_validator("MAX_RISK_PER_TRADE")
     @classmethod
-    def validate_risk(
-        cls,
-        value: float,
-    ):
-
+    def validate_risk(cls, value: float):
         if value <= 0 or value > 0.05:
-
-            raise ValueError(
-                "Invalid MAX_RISK_PER_TRADE"
-            )
-
+            raise ValueError("Invalid MAX_RISK_PER_TRADE")
         return value
 
     # =====================================================
@@ -134,10 +120,8 @@ class Settings(BaseSettings):
 
     @property
     def postgres_url(self):
-
         if self.DATABASE_URL:
             return self.DATABASE_URL
-
         return (
             "postgresql+asyncpg://"
             f"{self.POSTGRES_USER}:"
@@ -149,20 +133,13 @@ class Settings(BaseSettings):
 
     @property
     def redis_connection_url(self):
-
         if self.REDIS_URL:
             return self.REDIS_URL
-
-        return (
-            f"redis://"
-            f"{self.REDIS_HOST}:"
-            f"{self.REDIS_PORT}"
-        )
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}"
 
 
 @lru_cache
 def get_settings():
-
     return Settings()
 
 

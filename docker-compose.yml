@@ -7,9 +7,14 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    volumes:
+      - ./strategies:/app/strategies
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: on-failure
 
   frontend:
     build:
@@ -18,6 +23,9 @@ services:
     container_name: trading-frontend
     ports:
       - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -33,6 +41,11 @@ services:
       POSTGRES_DB: trading
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d trading"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7

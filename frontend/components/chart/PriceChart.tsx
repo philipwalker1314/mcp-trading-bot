@@ -7,9 +7,9 @@ export function PriceChart() {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef     = useRef<any>(null)
   const seriesRef    = useRef<any>(null)
+  const lastBarRef   = useRef<any>(null)
   const { prices }   = useTradingStore()
 
-  // Init chart
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -22,8 +22,8 @@ export function PriceChart() {
           fontSize:   11,
         },
         grid: {
-          vertLines:   { color: '#1a2530', style: 1 },
-          horzLines:   { color: '#1a2530', style: 1 },
+          vertLines: { color: '#1a2530', style: 1 },
+          horzLines: { color: '#1a2530', style: 1 },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
@@ -35,32 +35,28 @@ export function PriceChart() {
           textColor:   '#8ba8bc',
         },
         timeScale: {
-          borderColor:     '#1a2530',
-          textColor:       '#8ba8bc',
-          timeVisible:     true,
-          secondsVisible:  false,
+          borderColor:    '#1a2530',
+          textColor:      '#8ba8bc',
+          timeVisible:    true,
+          secondsVisible: false,
         },
-        handleScroll:  true,
-        handleScale:   true,
+        handleScroll: true,
+        handleScale:  true,
       })
 
       const series = chart.addCandlestickSeries({
-        upColor:          '#00d4a0',
-        downColor:        '#ff4c6a',
-        borderUpColor:    '#00d4a0',
-        borderDownColor:  '#ff4c6a',
-        wickUpColor:      '#00d4a040',
-        wickDownColor:    '#ff4c6a40',
+        upColor:         '#00d4a0',
+        downColor:       '#ff4c6a',
+        borderUpColor:   '#00d4a0',
+        borderDownColor: '#ff4c6a',
+        wickUpColor:     '#00d4a040',
+        wickDownColor:   '#ff4c6a40',
       })
 
       chartRef.current  = chart
       seriesRef.current = series
 
-      // Load historical data
-      fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/positions/`)
-        .catch(() => {})
-
-      // Fetch OHLCV from Binance public API for chart seed
+      // Seed from Binance public API — no auth needed
       fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=200')
         .then(r => r.json())
         .then((candles: any[]) => {
@@ -72,11 +68,12 @@ export function PriceChart() {
             close: parseFloat(c[4]),
           }))
           series.setData(data)
+          // Store last bar for live updates
+          lastBarRef.current = data[data.length - 1]
           chart.timeScale().fitContent()
         })
-        .catch(() => {})
+        .catch((e) => console.error('Binance fetch failed', e))
 
-      // Resize observer
       const ro = new ResizeObserver(() => {
         if (containerRef.current) {
           chart.applyOptions({
@@ -94,21 +91,33 @@ export function PriceChart() {
     })
   }, [])
 
-  // Update last candle with live price
+  // Live price updates — update current candle correctly
   useEffect(() => {
     const price = prices['BTC/USDT']
-    if (!seriesRef.current || !price) return
+    if (!seriesRef.current || !price || !lastBarRef.current) return
 
-    const now = Math.floor(Date.now() / 1000)
+    const now     = Math.floor(Date.now() / 1000)
     const barTime = Math.floor(now / 60) * 60 as any
+    const last    = lastBarRef.current
 
-    seriesRef.current.update({
-      time:  barTime,
-      open:  price,
-      high:  price,
-      low:   price,
-      close: price,
-    })
+    const updatedBar = barTime === last.time
+      ? {
+          time:  last.time,
+          open:  last.open,
+          high:  Math.max(last.high, price),
+          low:   Math.min(last.low,  price),
+          close: price,
+        }
+      : {
+          time:  barTime,
+          open:  price,
+          high:  price,
+          low:   price,
+          close: price,
+        }
+
+    lastBarRef.current = updatedBar
+    seriesRef.current.update(updatedBar)
   }, [prices['BTC/USDT']])
 
   return (
