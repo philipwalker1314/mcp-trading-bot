@@ -1011,27 +1011,105 @@ slide-in, StrategyStatusBadge. Zustand store + useStrategies hook with 30s polli
 Fix: ForeignKey declaration on StrategyVersion. Status: Complete and verified working.
 **Status: Complete and verified working.**
 
+---
 
-### Phase 6 🔲 AI Copilot / Conversational Trading
-The main differentiator of this platform. Nothing exists here yet.
+## Phase 6 ✅ — AI Copilot / Conversational Trading (Complete)
 
-Goal:
+The main differentiator of the platform. A natural language interface that lets you control the trading bot by typing commands.
+
+### What it does
+
+Type anything. The copilot interprets your intent, calls real backend services, and responds with data or confirmation.
+
+**Example interactions:**
+
 ```
-User: "Trade BTC only during NY session, risk 1% per trade"
-↓
-AI interprets intent
-↓
-Generates runtime strategy config + risk policy
-↓
-Bot updates behavior automatically — no code changes needed
+> What's my current PnL?
+→ AI fetches open positions, calculates unrealized PnL, responds with table
+
+> List all strategies
+→ Returns strategy table: name, status, timeframe, SL/TP
+
+> Enable the ema_crossover strategy
+→ ⚡ ENABLE STRATEGY ✓ — strategy is now LIVE
+
+> Set stop loss to 1.5% on ema_crossover_db
+→ ⚡ UPDATE STRATEGY RISK ✓ — stop_loss_pct updated to 0.015
+
+> Disable all strategies
+→ ⚡ DISABLE ALL STRATEGIES ✓ — 3 strategies disabled
+
+> Close all positions
+→ AI asks for confirmation first
+> Yes, close them
+→ ⚡ CLOSE ALL POSITIONS ✓ — 2 positions closed, PnL: -$12.40
+
+> What's the BTC price?
+→ BTC/USDT: $67,420.00 (live)
+
+> Show my analytics summary
+→ Sharpe: 1.24 | Max DD: -$42.00 (-2.1%) | Win Rate: 58.3%
 ```
 
-Examples the copilot should handle:
-- *"Trade BTC only during NY session."*
-- *"Risk 1% per trade."*
-- *"Close positions after 5 pip drawdown."*
-- *"Disable trading during CPI news."*
-- *"Show me my worst performing strategy this week."*
+### Architecture
+
+```
+Frontend CopilotChat
+↓ POST /copilot/chat { message, conversation_history }
+↓
+CopilotService
+↓ DeepSeek function calling (tool_choice=auto)
+↓
+Tool dispatcher → real services:
+  get_portfolio_status    → TradeLifecycleService
+  get_analytics_summary   → AnalyticsService
+  list_strategies         → StrategyConfigService
+  enable/disable_strategy → StrategyConfigService
+  update_strategy_risk    → StrategyConfigService
+  close_position          → TradeLifecycleService
+  close_all_positions     → TradeLifecycleService
+  get_market_price        → MarketDataEngine (sync, no await)
+↓
+Response { response, actions_taken, data }
+↓
+Frontend renders: text + action badges + data table
+```
+
+### New files
+
+**Backend:**
+- `app/api/copilot.py` — `POST /copilot/chat` endpoint
+- `app/services/copilot_service.py` — AI orchestration + tool dispatcher
+- Updated `app/main.py` — CopilotService init + router registration
+- `alembic/versions/phase6_copilot_history.py` — optional session log table
+
+**Frontend:**
+- `frontend/components/copilot/CopilotChat.tsx` — terminal chat UI
+- `frontend/hooks/useCopilot.ts` — send/receive logic
+- `frontend/store/copilot.ts` — Zustand message store
+- Updated `frontend/app/page.tsx` — `[ COPILOT ]` tab
+- Updated `frontend/lib/api.ts` — `api.copilot.chat()`
+
+### Safety rules built in
+
+- Destructive actions (close position, close all, emergency stop) require explicit user confirmation before the AI executes them
+- The copilot works in `ENABLE_TRADING=false` mode — read-only queries (PnL, analytics, strategies) always work; action commands return a clear error message
+- `get_latest_price()` is called synchronously (no await) as required by MarketDataEngine
+- Conversation history capped at last 10 turns to avoid token bloat
+
+### Token cost
+
+Each copilot message: ~200–600 tokens (DeepSeek `deepseek-chat`).
+Tool calls add ~100–200 tokens per tool executed.
+Typical interaction: 300–800 tokens total.
+
+### Applying the migration (optional)
+
+```bash
+alembic upgrade head
+```
+
+The copilot works without running this migration. The table is only needed if you want to persist conversation history server-side for future replay/audit features.
 
 ### Phase 7 🔲 Multi-Broker Connectivity
 Currently only Binance is supported (paper trading mode).

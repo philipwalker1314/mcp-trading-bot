@@ -15,6 +15,7 @@ import { EmergencyButton } from '@/components/positions/EmergencyButton'
 import { MetricsPanel }    from '@/components/analytics/MetricsPanel'
 import { StrategyList }    from '@/components/strategies/StrategyList'
 import { StrategyEditor }  from '@/components/strategies/StrategyEditor'
+import { CopilotChat }     from '@/components/copilot/CopilotChat'
 
 const PriceChart = dynamic(
   () => import('@/components/chart/PriceChart').then(m => m.PriceChart),
@@ -55,10 +56,12 @@ function TabButton({
   label,
   active,
   onClick,
+  highlight,
 }: {
-  label: string
-  active: boolean
-  onClick: () => void
+  label:      string
+  active:     boolean
+  onClick:    () => void
+  highlight?: boolean
 }) {
   return (
     <button
@@ -67,6 +70,8 @@ function TabButton({
         px-4 py-1.5 text-xs font-mono uppercase tracking-widest border-b-2 transition-colors
         ${active
           ? 'border-terminal-green text-terminal-green'
+          : highlight
+          ? 'border-transparent text-terminal-blue hover:text-terminal-white hover:border-terminal-blue'
           : 'border-transparent text-terminal-dim hover:text-terminal-text hover:border-terminal-border'
         }
       `}
@@ -81,10 +86,8 @@ function TabButton({
 // ─────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'trading' | 'analytics' | 'strategies'>('trading')
+  const [activeTab, setActiveTab] = useState<'trading' | 'analytics' | 'strategies' | 'copilot'>('trading')
 
-  // Track "creating new strategy" state at page level so
-  // StrategyList's "New" button and StrategyEditor stay in sync
   const [isCreating, setIsCreating] = useState(false)
   const { setSelectedId } = useStrategiesStore()
 
@@ -122,6 +125,12 @@ export default function Dashboard() {
           active={activeTab === 'strategies'}
           onClick={() => setActiveTab('strategies')}
         />
+        <TabButton
+          label="[ COPILOT ]"
+          active={activeTab === 'copilot'}
+          onClick={() => setActiveTab('copilot')}
+          highlight
+        />
       </div>
 
       {/* Vista TRADING */}
@@ -150,12 +159,9 @@ export default function Dashboard() {
       {/* Vista ANALYTICS */}
       {activeTab === 'analytics' && (
         <div className="flex flex-1 overflow-hidden">
-          {/* Equity chart — lado izquierdo */}
           <div className="flex-1 border-r border-terminal-border overflow-hidden" style={{ minHeight: 0 }}>
             <EquityChart />
           </div>
-
-          {/* Metrics panel — lado derecho */}
           <div className="w-[420px] overflow-hidden">
             <MetricsPanel />
           </div>
@@ -165,16 +171,23 @@ export default function Dashboard() {
       {/* Vista STRATEGIES */}
       {activeTab === 'strategies' && (
         <div className="flex flex-1 overflow-hidden">
-          {/* Left: strategy list */}
           <div className="w-[320px] border-r border-terminal-border overflow-hidden flex flex-col">
             <StrategyList onNew={handleNewStrategy} />
           </div>
-          {/* Right: editor / viewer */}
           <div className="flex-1 overflow-auto">
             <StrategyEditor
               isCreating={isCreating}
               onCancelNew={handleCancelNew}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Vista COPILOT */}
+      {activeTab === 'copilot' && (
+        <div className="flex flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden">
+            <CopilotChat />
           </div>
         </div>
       )}

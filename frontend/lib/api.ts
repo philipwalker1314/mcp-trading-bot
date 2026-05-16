@@ -88,4 +88,16 @@ export const api = {
         body: JSON.stringify(data),
       }),
   },
+
+  // Copilot — Phase 6
+  copilot: {
+    chat: (message: string, conversationHistory: { role: string; content: string }[]) =>
+      request<{ data: { response: string; actions_taken: any[]; data: any } }>('/copilot/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message,
+          conversation_history: conversationHistory,
+        }),
+      }),
+  },
 }

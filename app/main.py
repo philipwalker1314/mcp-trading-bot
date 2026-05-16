@@ -1,13 +1,14 @@
 """
-main.py — Phase 5 application entry point.
+main.py — Phase 6 application entry point.
 
 Startup sequence:
 1. Init DB
 2. Init Redis
 3. Init AnalyticsService + RollupTask
 4. Init StrategyConfigService
-5. Optionally start TradingBot runtime
-6. Register API routers + WebSocket endpoints
+5. Init CopilotService          ← Phase 6
+6. Optionally start TradingBot runtime
+7. Register API routers + WebSocket endpoints
 
 Shutdown sequence:
 1. Stop RollupTask
@@ -27,7 +28,8 @@ from app.api.positions import (
     analytics_router,
     positions_router,
 )
-from app.api.strategies import strategies_router  # Phase 5
+from app.api.strategies import strategies_router
+from app.api.copilot import copilot_router          # Phase 6
 from app.config import settings
 from app.database import (
     AsyncSessionLocal,
@@ -36,7 +38,8 @@ from app.database import (
 )
 from app.logger import get_logger
 from app.services.analytics_service import AnalyticsService
-from app.services.strategy_config_service import StrategyConfigService  # Phase 5
+from app.services.strategy_config_service import StrategyConfigService
+from app.services.copilot_service import CopilotService  # Phase 6
 from app.tasks.rollup import RollupTask
 from app.trading.trading_bot import TradingBot
 from app.websocket.manager import (
@@ -106,6 +109,15 @@ async def lifespan(app: FastAPI):
     logger.info("strategy_config_service_initialized")
 
     # =====================================================
+    # COPILOT SERVICE (Phase 6)
+    # =====================================================
+
+    copilot = CopilotService()
+    app.state.copilot = copilot
+
+    logger.info("copilot_service_initialized")
+
+    # =====================================================
     # OPTIONAL TRADING RUNTIME
     # =====================================================
 
@@ -117,14 +129,9 @@ async def lifespan(app: FastAPI):
 
         trading_bot = TradingBot()
 
-        # Future Redis Streams integration
         trading_bot.event_bus._redis_pub = None
 
-        # Expose lifecycle service to APIs
         app.state.lifecycle   = trading_bot.lifecycle
-
-        # FIX: exponer trading_bot para que emergency_close
-        # pueda obtener precios en vivo desde market_engine
         app.state.trading_bot = trading_bot
 
         bot_task = asyncio.create_task(
@@ -157,7 +164,6 @@ async def lifespan(app: FastAPI):
         "application_shutting_down"
     )
 
-    # Detener rollup task
     if rollup_task:
         try:
             await rollup_task.stop()
@@ -239,7 +245,8 @@ app.add_middleware(
 
 app.include_router(positions_router)
 app.include_router(analytics_router)
-app.include_router(strategies_router)   # Phase 5
+app.include_router(strategies_router)
+app.include_router(copilot_router)       # Phase 6
 app.include_router(ws_router)
 
 # =====================================================
