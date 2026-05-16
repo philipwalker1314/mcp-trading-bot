@@ -156,28 +156,84 @@ async def get_position_events(
 async def manual_close(
     position_id: int,
     body: ManualCloseRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Manually close a position at a given price."""
+    # Verificar que la posición existe y está abierta
     position = await db.get(Position, position_id)
     if not position:
         raise HTTPException(404, "Position not found")
 
     if position.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
-        raise HTTPException(400, f"Position is not open (status: {position.status})")
+        raise HTTPException(400, f"Position is not open (status: {position.status.value})")
+
+    # FIX: llamar al lifecycle real para cerrar la posición
+    lifecycle = getattr(request.app.state, "lifecycle", None)
+    if lifecycle is None:
+        raise HTTPException(503, "Trading lifecycle service not available — is ENABLE_TRADING=true?")
+
+    closed = await lifecycle.close_position(
+        position_id=position_id,
+        exit_price=body.exit_price,
+        reason=CloseReason.MANUAL,
+    )
+
+    if not closed:
+        raise HTTPException(500, "Close failed — position may have already been closed")
+
+    logger.info(
+        "manual_close_executed",
+        position_id=position_id,
+        exit_price=body.exit_price,
+        realized_pnl=closed.realized_pnl,
+    )
 
     return api_response(
-        data={"message": "close_requested", "position_id": position_id},
+        data=_serialize_position(closed),
+        meta={"close_reason": "MANUAL", "exit_price": body.exit_price},
     )
 
 
 @positions_router.post("/emergency-close")
-async def emergency_close(body: EmergencyCloseRequest):
+async def emergency_close(
+    body: EmergencyCloseRequest,
+    request: Request,
+):
     """Emergency close all open positions."""
     if not body.confirm:
         raise HTTPException(400, "Must set confirm=true")
 
-    return api_response(data={"status": "emergency_close_initiated"})
+    # FIX: llamar al lifecycle real para cerrar todas las posiciones
+    lifecycle = getattr(request.app.state, "lifecycle", None)
+    if lifecycle is None:
+        raise HTTPException(503, "Trading lifecycle service not available — is ENABLE_TRADING=true?")
+
+    # Obtener precios actuales desde market engine si está disponible
+    trading_bot = getattr(request.app.state, "trading_bot", None)
+    current_prices: dict[str, float] = {}
+
+    if trading_bot and hasattr(trading_bot, "market_engine"):
+        open_positions = await lifecycle.get_open_positions()
+        for p in open_positions:
+            price = trading_bot.market_engine.get_latest_price(p.symbol)
+            if price:
+                current_prices[p.symbol] = price
+
+    closed = await lifecycle.emergency_close_all(current_prices=current_prices)
+
+    logger.warning(
+        "emergency_close_api_executed",
+        positions_closed=len(closed),
+    )
+
+    return api_response(
+        data={
+            "status": "emergency_close_executed",
+            "positions_closed": len(closed),
+            "positions": [_serialize_position(p) for p in closed],
+        }
+    )
 
 
 # ─────────────────────────────────────────────
@@ -267,10 +323,6 @@ async def equity_curve(
     request: Request,
     days: int = Query(30, ge=1, le=365),
 ):
-    """
-    Serie temporal de PnL acumulado para graficar.
-    Devuelve [{date, daily_pnl, cumulative_pnl, total_trades, win_rate}]
-    """
     analytics = _get_analytics(request)
     curve = await analytics.get_equity_curve(days=days)
     return api_response(
@@ -284,9 +336,6 @@ async def sharpe_ratio(
     request: Request,
     days: int = Query(30, ge=7, le=365),
 ):
-    """
-    Sharpe ratio anualizado (252 días, risk-free rate = 0).
-    """
     analytics = _get_analytics(request)
     result = await analytics.get_sharpe_ratio(days=days)
     return api_response(data=result, meta={"days": days})
@@ -297,9 +346,6 @@ async def max_drawdown(
     request: Request,
     days: int = Query(30, ge=1, le=365),
 ):
-    """
-    Max drawdown peak-to-trough sobre la equity curve.
-    """
     analytics = _get_analytics(request)
     result = await analytics.get_max_drawdown(days=days)
     return api_response(data=result, meta={"days": days})
@@ -307,9 +353,6 @@ async def max_drawdown(
 
 @analytics_router.get("/trade-stats")
 async def trade_stats(request: Request):
-    """
-    Estadísticas de duración y distribución de trades cerrados.
-    """
     analytics = _get_analytics(request)
     result = await analytics.get_trade_duration_stats()
     return api_response(data=result)
@@ -317,9 +360,6 @@ async def trade_stats(request: Request):
 
 @analytics_router.get("/ai-performance")
 async def ai_performance(request: Request):
-    """
-    Métricas de rendimiento del AI filter vs todos los trades.
-    """
     analytics = _get_analytics(request)
     result = await analytics.get_ai_performance_metrics()
     return api_response(data=result)

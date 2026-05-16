@@ -121,7 +121,11 @@ async def lifespan(app: FastAPI):
         trading_bot.event_bus._redis_pub = None
 
         # Expose lifecycle service to APIs
-        app.state.lifecycle = trading_bot.lifecycle
+        app.state.lifecycle   = trading_bot.lifecycle
+
+        # FIX: exponer trading_bot para que emergency_close
+        # pueda obtener precios en vivo desde market_engine
+        app.state.trading_bot = trading_bot
 
         bot_task = asyncio.create_task(
             trading_bot.start(),
@@ -138,7 +142,8 @@ async def lifespan(app: FastAPI):
             "trading_runtime_disabled"
         )
 
-        app.state.lifecycle = None
+        app.state.lifecycle   = None
+        app.state.trading_bot = None
 
     logger.info("application_started")
 

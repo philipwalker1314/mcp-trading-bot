@@ -793,6 +793,7 @@ All responses use a consistent envelope:
 - Import `StrategyConfigService` and `strategies_router`
 - Initialize service in `lifespan` event
 - Register router in application
+- Expose `trading_bot` in `app.state` so `emergency_close` endpoint can access live prices from `market_engine`
 
 ### `app/trading/trading_bot.py`
 - Replace `StrategyLoader` → `DBStrategyLoader`
@@ -940,11 +941,14 @@ type: 'trading' | 'analytics' | 'strategies'
 
 ### Fixed Issues
 
-| Issue | Root Cause | Solution | Verification |
-|-------|-----------|----------|--------------|
-| Empty/error response from `/strategies/` | `StrategyVersion.strategy_id` missing explicit `ForeignKey` declaration; SQLAlchemy couldn't resolve relationship | Declare `ForeignKey("strategy_configs.id", ondelete="CASCADE")` correctly in model | Logs show `strategy_config_service_initialized` and `compiled_strategies_loaded` on startup |
-| - | - | - | Endpoint `/strategies/` responds with correct envelope |
-| - | - | - | **[ STRATEGIES ]** tab visible in frontend without breaking existing tabs |
+| File | Bug | Fix |
+|------|-----|-----|
+| `app/models/strategy_config.py` | `StrategyVersion.strategy_id` missing explicit `ForeignKey` declaration; SQLAlchemy couldn't resolve relationship | Declare `ForeignKey("strategy_configs.id", ondelete="CASCADE")` correctly in model |
+| `app/trading/lifecycle/position_monitor.py` | Error `'side'` en cada market tick después de cerrar una posición — el guard `if not position` estaba ubicado *después* de `update_unrealized_pnl`, que internamente intentaba reconstruir el cache accediendo a `position.side` de una posición ya cerrada | Mover el guard al inicio de `_process_tick`, antes de cualquier operación; limpiar `_pnl_cache` al detectar posición cerrada; limpiar también en `_on_position_closed` |
+| `app/trading/lifecycle/trade_lifecycle_service.py` | `update_unrealized_pnl` reconstruía el cache desde DB para posiciones cerradas o eliminadas, causando el error `'side'` en ticks subsiguientes | Agregar guard de status dentro del bloque de reconstrucción de cache: si `position.status` no es `FILLED` o `PARTIALLY_FILLED`, retornar sin tocar el cache |
+| `app/api/positions.py` | `POST /positions/{id}/close` solo devolvía `{"message": "close_requested"}` sin ejecutar ningún cierre real — el endpoint estaba incompleto | Implementar la llamada real a `lifecycle.close_position()` obteniendo el servicio desde `request.app.state`; devolver la posición cerrada completa con PnL calculado |
+| `app/api/positions.py` | `POST /positions/emergency-close` igual que el anterior — solo devolvía un status string sin cerrar nada | Implementar llamada real a `lifecycle.emergency_close_all()` con precios en vivo desde `market_engine` cuando está disponible |
+| `app/main.py` | `trading_bot` no expuesto en `app.state`, impidiendo que el endpoint de emergency close acceda a precios en vivo | Agregar `app.state.trading_bot = trading_bot` en el lifespan junto a `app.state.lifecycle` |
 
 ### Production Verification Checklist
 
@@ -954,16 +958,12 @@ type: 'trading' | 'analytics' | 'strategies'
 - ✅ **[ STRATEGIES ]** tab visible in frontend
 - ✅ No errors in console when navigating tabs
 - ✅ CRUD operations work end-to-end
-
----
-
-## Next Steps
-
-1. **Additional Indicators**: Extend `IndicatorEngine` with more technical analysis functions
-2. **Rule Complexity**: Add nested conditional logic (AND/OR operators)
-3. **Backtesting Integration**: Connect strategy configs to backtesting engine
-4. **Import/Export**: Add JSON strategy import/export functionality
-5. **Monitoring**: Add execution history and performance tracking per strategy
+- ✅ No `'side'` errors in logs after position close
+- ✅ `POST /positions/{id}/close` returns closed position with `realized_pnl` and `close_reason: MANUAL`
+- ✅ Double-close attempt correctly returns `400 Position is not open`
+- ✅ Bot generating signals and opening positions in paper mode
+- ✅ All 5 analytics endpoints returning `200`
+- ✅ 7 DB tables present with correct schema
 
 ---
 

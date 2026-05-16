@@ -87,11 +87,14 @@ class PositionMonitor:
     ):
         position = await self.lifecycle.get_position(position_id)
 
+        # FIX: guard ANTES de cualquier operación.
+        # Si la posición no existe o ya está cerrada, limpiar ambos caches y salir.
         if not position or position.status not in (
             OrderStatus.FILLED,
             OrderStatus.PARTIALLY_FILLED,
         ):
             self._remove_from_cache(symbol, position_id)
+            self.lifecycle._pnl_cache.pop(position_id, None)
             return
 
         await self.lifecycle.update_unrealized_pnl(position_id, price)
@@ -99,6 +102,14 @@ class PositionMonitor:
         if position.trailing_stop_pct:
             await self.lifecycle.update_trailing_stop(position_id, price)
             position = await self.lifecycle.get_position(position_id)
+            # Guard después de refetch — puede haberse cerrado entre ticks
+            if not position or position.status not in (
+                OrderStatus.FILLED,
+                OrderStatus.PARTIALLY_FILLED,
+            ):
+                self._remove_from_cache(symbol, position_id)
+                self.lifecycle._pnl_cache.pop(position_id, None)
+                return
 
         if PnLEngine.is_stop_loss_hit(position, price):
             logger.warning(
@@ -163,6 +174,8 @@ class PositionMonitor:
         pos_id  = payload.get("id")
         if symbol and pos_id:
             self._remove_from_cache(symbol, int(pos_id))
+            # Limpiar pnl_cache también en cierre normal
+            self.lifecycle._pnl_cache.pop(int(pos_id), None)
 
     def _remove_from_cache(self, symbol: str, position_id: int):
         if symbol in self._position_cache:
