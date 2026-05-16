@@ -832,5 +832,8 @@ The system currently:
 - Displays a live trading dashboard (Next.js 14) with real-time chart, positions, PnL, and emergency controls
 - Runs fully async inside Docker infrastructure
 - Optimized: PnL in-memory, DB writes minimized, trailing stop throttled, reconciliation skipped in paper trading, strategy loader cached
+- Agrega métricas diarias en `daily_metrics` vía rollup automático a medianoche UTC
+- Calcula Sharpe ratio, max drawdown, equity curve y trade stats via API REST
+- Muestra tab `[ ANALYTICS ]` en el frontend con EquityChart y MetricsPanel en tiempo real
 
-**The next milestone is Phase 4 — the Analytics Engine.**
+**The next milestone is Phase 5 — Runtime Strategy Config System.**
